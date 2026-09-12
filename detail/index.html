@@ -1,0 +1,70 @@
+<!-- 시리즈의 개요·권별 목록·파일·추천·메타정보를 탭으로 표시합니다. -->
+<section class="ds" aria-label="도서 상세">
+  <div class="ds-backdrop" aria-hidden="true"><div class="ds-colorscape"></div><img class="ds-banner" data-banner alt="" hidden></div>
+  <div class="ds-topbar">
+  <nav class="ds-tabs" role="tablist" aria-label="도서 상세 탭">
+    <button type="button" role="tab" id="ds-tab-overview" aria-controls="ds-panel-overview" aria-selected="true" data-tab="overview">개요</button>
+    <button type="button" role="tab" id="ds-tab-series" aria-controls="ds-panel-series" aria-selected="false" tabindex="-1" data-tab="series">시리즈 <span data-count></span></button>
+    <button type="button" role="tab" id="ds-tab-files" aria-controls="ds-panel-files" aria-selected="false" tabindex="-1" data-tab="files">파일 <span data-count></span></button>
+    <button type="button" role="tab" id="ds-tab-similar" aria-controls="ds-panel-similar" aria-selected="false" tabindex="-1" data-tab="similar">유사한 책</button>
+    <button type="button" role="tab" id="ds-tab-metadata" aria-controls="ds-panel-metadata" aria-selected="false" tabindex="-1" data-tab="metadata">메타정보</button>
+  </nav>
+  <div class="ds-appearance" role="group" aria-label="상세 배경 옵션">
+    <label><input type="checkbox" role="switch" data-effect="banner">배너</label>
+    <label title="표지의 주요 색상으로 배경을 구성합니다."><input type="checkbox" role="switch" data-effect="colorscape">Colorscape</label>
+  </div>
+  </div>
+  <div class="ds-layout">
+    <aside class="ds-rail" aria-label="표지 및 읽기">
+      <div class="ds-cover"><img data-cover alt=""><span data-no-cover hidden>표지 없음</span></div>
+      <button type="button" class="ds-button ds-primary ds-read" data-action="read"><i class="fa-solid fa-book-open" aria-hidden="true"></i><span data-read-label>첫 권부터 읽기</span></button>
+      <div class="ds-rail-actions">
+        <button type="button" class="ds-button" data-action="favorite" aria-pressed="false"><i class="fa-regular fa-star" aria-hidden="true"></i><span>즐겨찾기</span></button>
+        <button type="button" class="ds-button" data-action="collection" title="컬렉션에 추가"><i class="fa-solid fa-layer-group" aria-hidden="true"></i><span>컬렉션</span></button>
+      </div>
+      <button type="button" class="ds-button ds-files-button" data-action="show-files"><i class="fa-regular fa-folder-open" aria-hidden="true"></i><span>파일</span></button>
+      <div class="ds-rail-note"><span class="ds-eyebrow">MY READING</span><div class="ds-between"><strong data-reading-state>읽기 전</strong><span data-percent></span></div><progress data-series-progress max="100" value="0" aria-label="시리즈 독서 진행률"></progress><small data-reading-caption></small></div>
+      <p class="ds-notice" data-notice role="status" aria-live="polite" hidden></p>
+    </aside>
+    <main class="ds-main">
+      <header class="ds-heading">
+        <div class="ds-kicker"><span data-library-path>LIBRARY</span><span class="ds-pill" data-format></span></div>
+        <h1 data-title></h1>
+        <p class="ds-byline" data-byline></p>
+        <div class="ds-chips" data-chips></div>
+      </header>
+      <section id="ds-panel-overview" role="tabpanel" aria-labelledby="ds-tab-overview" class="ds-panel">
+        <div class="ds-overview-grid">
+          <article class="ds-card ds-synopsis"><div class="ds-section-label">책 소개</div><p data-summary></p><button type="button" class="ds-text-button" data-action="summary" aria-expanded="false" hidden>더 보기</button></article>
+          <article class="ds-card ds-facts"><div class="ds-section-label">상세 정보</div><dl data-facts></dl></article>
+        </div>
+        <article class="ds-card ds-reading-card"><div><div class="ds-section-label">나의 독서</div><div class="ds-stats" data-stats></div></div><div class="ds-current" data-current></div></article>
+        <div class="ds-section-heading"><div><h2>시리즈 둘러보기</h2><p>이야기가 이어지는 다음 권.</p></div><button type="button" class="ds-text-button" data-action="show-series">전체 보기 <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button></div>
+        <div class="ds-shelf" data-preview-books></div>
+      </section>
+      <section id="ds-panel-series" role="tabpanel" aria-labelledby="ds-tab-series" class="ds-panel" hidden>
+        <div class="ds-section-heading"><div><h2>시리즈 도서</h2><p data-series-description></p></div><div class="ds-segment" aria-label="보기 방식"><button type="button" data-view="grid" aria-pressed="true" aria-label="표지로 보기" title="표지로 보기"><i class="fa-solid fa-table-cells-large" aria-hidden="true"></i></button><button type="button" data-view="list" aria-pressed="false" aria-label="목록으로 보기" title="목록으로 보기"><i class="fa-solid fa-list" aria-hidden="true"></i></button></div></div>
+        <div class="ds-toolbar"><label class="ds-search"><i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i><input type="search" data-series-search placeholder="권 제목 검색" aria-label="권 제목 검색"></label><select data-series-filter aria-label="독서 상태 필터"><option value="all">전체 도서</option><option value="reading">읽는 중</option><option value="unread">미독</option><option value="completed">완독</option></select></div>
+        <div class="ds-books" data-series-books></div>
+      </section>
+      <section id="ds-panel-files" role="tabpanel" aria-labelledby="ds-tab-files" class="ds-panel" hidden>
+        <div class="ds-section-heading"><div><h2>파일</h2><p>보관된 파일의 위치와 형식을 확인하세요.</p></div><span class="ds-pill" data-file-total></span></div>
+        <label class="ds-search ds-file-search"><i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i><input type="search" data-file-search placeholder="파일명 또는 경로 검색" aria-label="파일 검색"></label>
+        <div class="ds-table-wrap"><table class="ds-table"><thead><tr><th scope="col">파일명 · 경로</th><th scope="col">형식</th><th scope="col">용량</th><th scope="col">수정일</th><th scope="col">책 등록일</th><th scope="col"><span class="ds-sr">파일 작업</span></th></tr></thead><tbody data-files></tbody></table></div>
+        <p class="ds-hint">경로는 BookOasis 서버 기준입니다. 용량과 수정일은 마지막 스캔 값을 표시합니다.</p>
+      </section>
+      <section id="ds-panel-similar" role="tabpanel" aria-labelledby="ds-tab-similar" class="ds-panel" hidden>
+        <div class="ds-section-heading"><div><h2>다음으로 읽기 좋은 책</h2><p>같은 작가, 공통 장르와 태그를 바탕으로 골랐어요.</p></div><button type="button" class="ds-button" data-action="retry-similar">다시 불러오기</button></div><div class="ds-books" data-similar></div>
+      </section>
+      <section id="ds-panel-metadata" role="tabpanel" aria-labelledby="ds-tab-metadata" class="ds-panel" hidden>
+        <div class="ds-section-heading"><div><h2>메타정보</h2><p data-edit-caption>시리즈에 등록된 도서 정보입니다.</p></div><button type="button" class="ds-button" data-action="edit" hidden><i class="fa-regular fa-pen-to-square" aria-hidden="true"></i>정보 편집</button></div>
+        <article class="ds-card" data-metadata-view><dl class="ds-metadata-list" data-metadata></dl></article>
+        <form data-edit-form hidden>
+          <p class="ds-edit-scope" data-edit-scope></p>
+          <div class="ds-edit-grid"><article class="ds-card"><div class="ds-section-label">기본 정보</div><div data-edit-fields></div><label class="ds-field">표지 이미지<input type="file" name="cover_image" accept="image/jpeg,image/png,image/webp"><small>JPG, PNG, WebP · 최대 10MB</small></label></article><article class="ds-card"><label class="ds-field ds-description-field">책 소개<textarea name="summary" rows="16" maxlength="50000"></textarea></label></article></div>
+          <div class="ds-savebar"><span>저장한 정보는 메타데이터 잠금 상태로 유지됩니다.</span><div><button type="button" class="ds-button" data-action="cancel-edit">취소</button><button type="submit" class="ds-button ds-primary">변경사항 저장</button></div></div>
+        </form>
+      </section>
+    </main>
+  </div>
+</section>
