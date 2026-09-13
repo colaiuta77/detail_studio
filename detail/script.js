@@ -191,6 +191,22 @@
     if (!allowNavigation()) return;
     window.openReader(Number(book.id), book.file_format, title(book), num(book.pages_read), num(book.total_pages));
   }
+  function bindBookMenu(target, book) {
+    if (media || !book) return;
+    target.title = `${title(book)} · 우클릭으로 도서 메뉴`;
+    target.addEventListener('contextmenu', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (dirty || saving) return notify('편집을 저장하거나 취소한 후 도서 메뉴를 열어 주세요.');
+      if (typeof window.showBookContextMenu !== 'function') return notify('코어 도서 메뉴를 연결하지 못했습니다. 페이지를 새로고침해 주세요.', true);
+      window.showBookContextMenu(event.clientX, event.clientY, Number(book.id), title(book), true, {
+        seriesName: meta.series_name || context.seriesName,
+        libraryId: book.library_id ?? libraryId ?? context.libraryId,
+        markUnreadScope: 'book',
+      });
+      notify('메뉴에서 표지·메타정보·읽기 상태를 변경했다면 상세페이지를 다시 열어 최신 정보를 확인해 주세요.');
+    });
+  }
   function bookCard(book, index, recommended = false) {
     const card = node('article', 'ds-book');
     const button = node('button', 'ds-book-open');
@@ -200,6 +216,7 @@
     const art = image(recommended ? book.cover : book.cover_image);
     if (!recommended) {
       button.classList.add('ds-readable');
+      bindBookMenu(art, book);
       art.append(node('span', 'ds-book-number', String(index + 1).padStart(2, '0')));
       const overlay = node('span', 'ds-book-overlay');
       overlay.setAttribute('aria-hidden', 'true');
@@ -621,6 +638,7 @@
       document.removeEventListener('click', stopNavigation, true); window.removeEventListener('beforeunload', beforeUnload); observer.disconnect();
     });
     observer.observe(container.parentNode || document.body, { childList: true, subtree: true });
+    bindBookMenu($('.ds-cover'), books[0]);
     renderHeader(); renderSeries(); renderFiles();
     root.dataset.ready = 'true';
     await loadFiles();

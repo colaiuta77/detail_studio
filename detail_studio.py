@@ -6,7 +6,7 @@ import re
 from flask import has_request_context, request, session
 from plugins.metadata.base import BaseMetadataProvider
 
-PLUGIN_VERSION = '0.4.2'
+PLUGIN_VERSION = '0.4.3'
 
 
 def tokens(value):
