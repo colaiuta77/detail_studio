@@ -15,7 +15,7 @@
     for (const key of Object.keys(appearance)) appearance[key] = saved?.[key] === true;
   } catch { /* 저장소가 제한된 브라우저에서는 현재 페이지에서만 설정한다. */ }
   let paletteSource = '', palette = null;
-  let media = false, unit = '권', canArchiveDownload = false, libraryName = '', libraryId = null;
+  let media = false, unit = '권', canDownload = false, libraryName = '', libraryId = null;
   const libraryTypes = { general: '일반도서', adult: '성인도서', audiobook: '오디오북', video: '영상강좌' };
   let fields = [['series_alias', '표시 제목'], ['author', '작가'], ['publisher', '출판사'], ['isbn', 'ISBN / WEB ID'], ['genre', '장르'], ['tags', '태그'], ['link', '관련 링크']];
   const title = (book) => book.title_alias || book.title || '제목 없음';
@@ -139,6 +139,17 @@
   }
   function renderChips() {
     $('[data-chips]').replaceChildren();
+    if (String(meta.books_lv || '').trim()) {
+      const raw = String(meta.books_lv).trim().toLowerCase();
+      const level = Number(meta.content_rating_level ?? (['everyone', '일반'].includes(raw) ? 0 : ['ma15+', 'm', '15세'].includes(raw) ? 15 : 18));
+      const badge = node('span', 'ds-chip ds-rating');
+      badge.dataset.level = String(level);
+      badge.title = `도서 등급: ${meta.books_lv}`;
+      const shield = node('i', 'fa-solid fa-shield-halved');
+      shield.setAttribute('aria-hidden', 'true');
+      badge.append(shield, document.createTextNode(meta.content_rating_label || (level === 0 ? '전체이용가' : level === 15 ? '15세이상' : '18세이상(성인)')));
+      $('[data-chips]').append(badge);
+    }
     for (const [kind, values] of [['genre', split(meta.genre)], ['tag', split(meta.tags)]]) {
       for (const value of values) {
         const chip = node('button', `ds-chip ds-chip-${kind}`, value);
@@ -406,19 +417,18 @@
       });
       actions.append(copy);
       const format = String(book.file_format).toLowerCase();
-      const archive = ['zip', 'cbz'].includes(format);
-      if (!media && (['epub', 'pdf', 'txt'].includes(format) || (archive && canArchiveDownload))) {
+      if (!media && canDownload && ['epub', 'pdf', 'txt'].includes(format)) {
         const download = node('a', 'ds-icon-button');
-        download.href = archive ? `/opds/download/${type}/${Number(book.id)}` : `/api/media/books/${Number(book.id)}/download?${new URLSearchParams({ type })}`;
+        download.href = `/api/media/books/${Number(book.id)}/download?${new URLSearchParams({ type })}`;
         download.setAttribute('download', '');
-        download.title = format === 'zip' ? '다운로드 (코어에서 CBZ로 제공)' : '다운로드';
+        download.title = '다운로드';
         download.setAttribute('aria-label', `${title(book)} 다운로드`);
         download.append(icon('download'));
         actions.append(download);
       }
       const actionCell = node('td');
       actionCell.append(actions);
-      row.append(name, node('td', '', String(book.file_format || '—').toUpperCase()), node('td', '', extra ? bytes(extra.file_size) : '—'), node('td', '', num(extra?.file_mtime) ? new Date(extra.file_mtime * 1000).toLocaleDateString('ko-KR') : '—'), node('td', '', formatDate(extra?.created_at || book.created_at)), actionCell);
+      row.append(name, node('td', '', String(book.file_format || '—').toUpperCase()), node('td', '', extra ? bytes(extra.file_size) : '—'), node('td', '', num(extra?.file_mtime) ? formatDate(new Date(extra.file_mtime * 1000)) : '—'), node('td', '', formatDate(extra?.created_at || book.created_at)), actionCell);
       body.append(row);
     }
     if (!selected.length) {
@@ -437,7 +447,7 @@
       editScope = data.edit_scope;
       libraryName = data.library_name || '';
       libraryId = data.library_id ?? null;
-      canArchiveDownload = data.can_archive_download === true;
+      canDownload = data.can_download === true;
       if (media) $('#ds-panel-files .ds-hint').textContent = '경로는 서버 기준입니다. 책 등록일은 개별 파일의 등록일이며, 제공되지 않는 날짜는 —로 표시합니다.';
       filesLoaded = true;
       $('[data-action=edit]').hidden = !canEdit;
@@ -496,6 +506,7 @@
     if (!canEdit || saving) return;
     const form = event.currentTarget;
     const data = new FormData(form);
+    if (!media) data.set('books_lv', meta.books_lv || '');
     const file = data.get('cover_image');
     if (file?.size && (file.size > 10 * 1024 * 1024 || !['image/jpeg', 'image/png', 'image/webp'].includes(file.type))) return notify('표지는 10MB 이하의 JPG, PNG, WebP 파일을 선택해 주세요.', true);
     if (!file?.size) data.delete('cover_image');

@@ -6,7 +6,7 @@ import re
 from flask import has_request_context, request, session
 from plugins.metadata.base import BaseMetadataProvider
 
-PLUGIN_VERSION = '0.4.3'
+PLUGIN_VERSION = '0.4.4'
 
 
 def tokens(value):
@@ -51,6 +51,15 @@ class DetailStudioMetadataProvider(BaseMetadataProvider):
         if book_id < 1 or mode not in ('files', 'similar'):
             return {'success': False, 'error': '올바르지 않은 요청입니다.'}
 
+        from api.auth import check_adult_permission, check_download_permission, check_book_rating_permission
+        from services.content_rating_service import ContentRatingService
+        if not check_adult_permission(db_type):
+            return {'success': False, 'error': '접근할 수 없는 서재입니다.'}
+        max_rating = session.get('content_rating_max', 18)
+        def visible(row):
+            return admin or ContentRatingService.compute_effective_level(
+                row.get('books_lv'), row.get('genre'), row.get('tags')) <= int(max_rating)
+
         gateway = self.get_db_gateway(db_type)
         libraries = [] if admin else sorted(str(row['library_id']) for row in gateway.fetch_all(
             'SELECT library_id FROM user_category_permissions WHERE user_id = ? AND has_access = 1',
@@ -61,30 +70,32 @@ class DetailStudioMetadataProvider(BaseMetadataProvider):
         if db_type in ('audiobook', 'video'):
             return self._media_data(gateway, db_type, book_id, mode, limit, admin, permission, libraries)
         target = gateway.fetch_one(
-            'SELECT b.id, b.series_name, b.library_id, b.author, b.genre, b.tags FROM books b '
+            'SELECT b.id, b.series_name, b.library_id, b.author, b.genre, b.tags, b.books_lv FROM books b '
             'WHERE b.id = ? AND COALESCE(b.is_deleted, 0) = 0' + permission,
             (book_id, *libraries))
-        if not target:
+        if not target or not visible(target):
             return {'success': False, 'error': '도서를 찾을 수 없거나 접근 권한이 없습니다.'}
 
         if mode == 'files':
             library = gateway.fetch_one('SELECT name FROM libraries WHERE id = ?', (target['library_id'],))
             files = gateway.fetch_all(
-                'SELECT id, file_size, file_mtime, created_at FROM books WHERE series_name = ? '
+                'SELECT id, file_size, file_mtime, created_at, books_lv, genre, tags FROM books WHERE series_name = ? '
                 'AND library_id = ? AND COALESCE(is_deleted, 0) = 0 ORDER BY id',
                 (target['series_name'], target['library_id']))
+            files = [row for row in files if visible(row)]
             # 기존 저장 API의 WHERE series_name 범위와 일치시킨다(삭제 표시 행도 포함).
             scope = gateway.fetch_one(
                 'SELECT COUNT(*) AS books, COUNT(DISTINCT library_id) AS libraries FROM books WHERE series_name = ?',
                 (target['series_name'],)) if admin else None
-            return {'success': True, 'files': files, 'can_edit': admin, 'edit_scope': scope, 'library_name': library['name'] if library else '', 'library_id': target['library_id'], 'can_archive_download': db_type == 'general' or admin}
+            return {'success': True, 'files': files, 'can_edit': admin, 'edit_scope': scope, 'library_name': library['name'] if library else '', 'library_id': target['library_id'], 'can_download': check_download_permission()}
 
-        signature = json.dumps([db_type, target, admin, libraries], sort_keys=True, ensure_ascii=False)
+        signature = json.dumps([db_type, target, admin, libraries, max_rating, ContentRatingService.get_adult_keywords()], sort_keys=True, ensure_ascii=False)
         cache_key = 'similar:' + hashlib.sha256(signature.encode()).hexdigest()
         try:
             cached = self.cache_get(cache_key)
             if cached:
-                return {'success': True, 'items': json.loads(cached)[:limit]}
+                return {'success': True, 'items': [item for item in json.loads(cached)
+                                                   if check_book_rating_permission(db_type, item['book_id'])][:limit]}
         except (ValueError, TypeError):
             pass
 
@@ -98,13 +109,15 @@ class DetailStudioMetadataProvider(BaseMetadataProvider):
             return {'success': True, 'items': []}
         # ponytail: 후보 400권의 규칙 기반 추천. 대형 서재에서 누락이 문제면 토큰 인덱스로 전환한다.
         rows = gateway.fetch_all(
-            'SELECT b.id, b.series_name, b.library_id, b.author, b.genre, b.tags, b.cover_image, b.file_format '
+            'SELECT b.id, b.series_name, b.library_id, b.author, b.genre, b.tags, b.books_lv, b.cover_image, b.file_format '
             'FROM books b WHERE COALESCE(b.is_deleted, 0) = 0 '
             "AND b.series_name IS NOT NULL AND b.series_name <> '' AND b.series_name <> ?" + permission +
             ' AND (' + ' OR '.join(clauses) + ') ORDER BY b.id DESC LIMIT 400',
             (target['series_name'], *libraries, *values))
         ranked = {}
         for row in rows:
+            if not visible(row):
+                continue
             reasons, score = [], 0
             for field, label, weight in [('author', '같은 작가', 6), ('genre', '공통 장르', 2), ('tags', '공통 태그', 1)]:
                 common = groups[field] & tokens(row[field])

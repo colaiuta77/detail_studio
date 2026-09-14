@@ -232,6 +232,7 @@
 }
 
 .ds [data-library-path]{font-size:12px;font-weight:600;letter-spacing:.3px;color:color-mix(in srgb,var(--ds-accent) 65%,var(--ds-text));overflow-wrap:anywhere}
+.ds [data-library-path]>span:not(:first-child){display:inline-block;margin:0 8px;opacity:.7}
 .ds .ds-library-link{font:inherit;color:inherit;border:0;background:none;padding:2px 0;text-align:left}
 .ds .ds-library-link:hover{text-decoration:underline;text-underline-offset:3px}
 
@@ -249,3 +250,14 @@
 .ds .ds-list .ds-book-overlay i{width:36px;height:36px;font-size:16px}
 @media(max-width:700px){.ds .ds-rail>.ds-notice{grid-column:1/-1;margin-top:8px!important}}
 @media(prefers-reduced-motion:reduce){.ds .ds-book-art,.ds .ds-book-overlay,.ds .ds-book-overlay i{transition:none}}
+
+@media(min-width:701px){
+.ds .ds-table tr:has(.ds-path[open]){position:relative}
+.ds .ds-table tr:has(.ds-path[open]) td{padding-bottom:62px}
+.ds .ds-path[open] summary{white-space:nowrap}
+.ds .ds-path code{position:absolute;left:14px;right:14px;bottom:10px;margin:0;white-space:pre;overflow-wrap:normal;overflow-x:auto}
+}
+
+.ds .ds-rating{display:inline-flex;align-items:center;gap:5px;color:#50b88b;background:#50b88b18;border-color:#50b88b55;font-weight:700}
+.ds .ds-rating[data-level="15"]{color:#e4ad45;background:#e4ad4518;border-color:#e4ad4555}
+.ds .ds-rating[data-level="18"]{color:#ee656b;background:#ee656b18;border-color:#ee656b55}
