@@ -7,6 +7,7 @@
   const all = (selector) => [...root.querySelectorAll(selector)];
   const meta = { ...(context.meta || {}) };
   const books = (context.books || []).filter((book) => Number.isInteger(Number(book.id)) && Number(book.id) > 0);
+  let coreState;
   let type, activeTab = 'overview', filesLoaded = false, similarLoaded = false, loadingSimilar = false;
   let extras = new Map(), canEdit = false, editScope = null, dirty = false, saving = false;
   const appearance = { banner: false, colorscape: false };
@@ -139,16 +140,22 @@
   }
   function renderChips() {
     $('[data-chips]').replaceChildren();
-    if (String(meta.books_lv || '').trim()) {
-      const raw = String(meta.books_lv).trim().toLowerCase();
-      const level = Number(meta.content_rating_level ?? (['everyone', '일반'].includes(raw) ? 0 : ['ma15+', 'm', '15세'].includes(raw) ? 15 : 18));
+    $('[data-statuses]').replaceChildren();
+    const level = Number(meta.content_rating_level);
+    if (coreState?.showContentRatingBadge === true && Number.isFinite(level)) {
       const badge = node('span', 'ds-chip ds-rating');
       badge.dataset.level = String(level);
-      badge.title = `도서 등급: ${meta.books_lv}`;
+      badge.title = '열람 등급';
       const shield = node('i', 'fa-solid fa-shield-halved');
       shield.setAttribute('aria-hidden', 'true');
       badge.append(shield, document.createTextNode(meta.content_rating_label || (level === 0 ? '전체이용가' : level === 15 ? '15세이상' : '18세이상(성인)')));
-      $('[data-chips]').append(badge);
+      $('[data-statuses]').append(badge);
+    }
+    if (!media) {
+      const label = meta.publication_status_label || '알 수 없음';
+      const badge = node('span', 'ds-chip ds-publication'); badge.dataset.status = label; badge.title = '연재 상태';
+      const icon = node('i', 'fa-solid fa-bookmark'); icon.setAttribute('aria-hidden', 'true');
+      badge.append(icon, document.createTextNode(label)); $('[data-statuses]').append(badge);
     }
     for (const [kind, values] of [['genre', split(meta.genre)], ['tag', split(meta.tags)]]) {
       for (const value of values) {
@@ -165,11 +172,14 @@
       }
     }
   }
+  let noticeTimer;
   function notify(message, error = false) {
     const el = $('[data-notice]');
     el.textContent = message;
     el.dataset.error = String(error);
     el.hidden = false;
+    clearTimeout(noticeTimer);
+    noticeTimer = setTimeout(() => { el.hidden = true; }, error ? 7000 : 4000);
   }
   async function request(url, options = {}) {
     const response = await fetch(url, { credentials: 'same-origin', signal: AbortSignal.timeout(20000), ...options });
@@ -201,6 +211,104 @@
     if (typeof window.openReader !== 'function') return notify('리더를 연결하지 못했습니다. 페이지를 새로고침해 주세요.', true);
     if (!allowNavigation()) return;
     window.openReader(Number(book.id), book.file_format, title(book), num(book.pages_read), num(book.total_pages));
+  }
+  function setupPreferences() {
+    const sizes = {};
+    try { Object.assign(sizes, JSON.parse(localStorage.getItem(`${pluginId}:sizes`) || '{}')); } catch {}
+    const specs = [['shelf', '시리즈 둘러보기', 180, 90, 320], ['grid', '시리즈 표지 보기', 150, 90, 300], ['list', '시리즈 목록 보기', 80, 50, 160]];
+    function updatePreview() {
+      $('[data-size-preview]').replaceChildren(...specs.map(([key, label, fallback]) => {
+        const item = node('div', '', label), img = node('img');
+        const src = safeUrl(meta.cover_image || books[0]?.cover_image, true);
+        if (src) img.src = src;
+        img.alt = `${label} 미리보기`; img.style.width = `${sizes[key] || fallback}px`;
+        item.append(img); return item;
+      }));
+    }
+    for (const [key, label, fallback, min, max] of specs) {
+      const row = node('div', 'ds-size-control');
+      const range = node('input'), number = node('input');
+      range.type = 'range'; number.type = 'number';
+      const initial = Number(sizes[key]);
+      if (Number.isFinite(initial) && initial >= min && initial <= max) root.style.setProperty(`--ds-${key}-size`, `${initial}px`);
+      else delete sizes[key];
+      for (const input of [range, number]) {
+        input.min = min; input.max = max; input.value = sizes[key] || fallback;
+        input.setAttribute('aria-label', label);
+        input.addEventListener('input', () => {
+          if (!input.value || !Number.isFinite(Number(input.value))) return;
+          const value = Math.min(max, Math.max(min, Number(input.value)));
+          sizes[key] = value; range.value = number.value = value;
+          root.style.setProperty(`--ds-${key}-size`, `${value}px`);
+          try { localStorage.setItem(`${pluginId}:sizes`, JSON.stringify(sizes)); } catch {}
+          updatePreview();
+        });
+      }
+      row.append(node('span', '', label), range, number); $('[data-size-settings]').append(row);
+    }
+    $('[data-size-reset]').addEventListener('click', () => {
+      specs.forEach(([key, , fallback], i) => {
+        delete sizes[key]; root.style.removeProperty(`--ds-${key}-size`);
+        $('[data-size-settings]').children[i].querySelectorAll('input').forEach(input => input.value = fallback);
+      });
+      try { localStorage.removeItem(`${pluginId}:sizes`); } catch {}
+      updatePreview();
+    });
+    updatePreview();
+  }
+  async function loadRating() {
+    const target = $('[data-stars]');
+    const score = Math.max(0, Math.min(5, Math.round(num(meta.score) / 20)));
+    const starIcon = filled => {
+      const star = node('i', `fa-${filled ? 'solid' : 'regular'} fa-star`);
+      star.setAttribute('aria-hidden', 'true');
+      return star;
+    };
+    target.setAttribute('aria-label', `도서 평점 ${score}점 / 5점`);
+    target.replaceChildren(...[1,2,3,4,5].map(value => starIcon(value <= score)));
+    if (type !== 'general') return;
+    const ratingContext = {seriesName: meta.series_name || context.seriesName, libraryId: libraryId ?? context.libraryId, bookId: books[0]?.id, author: meta.author || '', isbn: meta.isbn || ''};
+    try {
+      const api = await import('/static/js/api.js');
+      let data = await api.fetchRatingWidget(type, ratingContext);
+      if (!root.isConnected || !data.success) return;
+      let submitting = false;
+      function draw() {
+        const mine = Math.max(0, Math.min(5, Math.round(num(data.my_rating))));
+        target.setAttribute('aria-label', `내 평점 ${mine}점 / 5점`);
+        target.replaceChildren(...[1,2,3,4,5].map(value => {
+          const button = node('button'); button.type = 'button'; button.append(starIcon(value <= mine));
+          button.disabled = submitting;
+          button.setAttribute('aria-label', `${value}점`); button.setAttribute('aria-pressed', String(value === mine));
+          button.addEventListener('click', async () => {
+            if (submitting || saving) return;
+            submitting = true; draw();
+            try {
+              const result = await api.submitRating(type, ratingContext, value);
+              if (!result.success) throw new Error(result.error || '별점 저장에 실패했습니다.');
+              data = result;
+            } catch (error) { if (root.isConnected) notify(error.message || '별점 저장에 실패했습니다.', true); }
+            finally { submitting = false; if (root.isConnected) draw(); }
+          });
+          return button;
+        }));
+        if (num(data.count)) target.append(node('small', 'ds-rating-summary', `${num(data.count)}명 · 평균 ${num(data.average).toFixed(1)}`));
+      }
+      draw();
+    } catch { /* 활성 제공자가 없거나 연결 실패 시 코어 점수 별표를 유지한다. */ }
+  }
+  function fitSummary() {
+    const card = $('.ds-synopsis'), paragraph = $('[data-summary]'), button = $('[data-action=summary]');
+    if (!card.offsetWidth) return;
+    const info = $('.ds-facts').getBoundingClientRect(), box = card.getBoundingClientRect();
+    const style = getComputedStyle(card);
+    const overhead = paragraph.getBoundingClientRect().top - box.top + parseFloat(style.paddingBottom) + parseFloat(style.borderBottomWidth);
+    const available = Math.abs(info.top - box.top) < 2 ? info.height - overhead : parseFloat(getComputedStyle(paragraph).lineHeight) * 7;
+    const overflow = paragraph.scrollHeight > available + 1;
+    button.hidden = !overflow;
+    const reserve = overflow ? button.offsetHeight + parseFloat(getComputedStyle(button).marginTop) : 0;
+    paragraph.style.setProperty('--ds-summary-height', `${Math.max(24, available - reserve)}px`);
+    paragraph.classList.toggle('ds-clamped', overflow && button.getAttribute('aria-expanded') !== 'true');
   }
   function bindBookMenu(target, book) {
     if (media || !book) return;
@@ -269,16 +377,27 @@
     }
   }
   function metadataView() {
-    facts($('[data-metadata]'), [['시리즈명', meta.series_name || context.seriesName], ...fields.map(([key, label]) => [label, meta[key]]), ['책 소개', meta.summary], ['메타정보 잠금', Number(meta.metadata_locked) === 1 ? '잠김' : '잠금 해제']]);
-    const link = safeUrl(meta.link);
+    facts($('[data-metadata]'), [['시리즈명', meta.series_name || context.seriesName], ...fields.map(([key, label]) => [label, meta[key]]), ...(!media ? [['그림 작가', meta.cover_artist], ['팀', meta.teams], ['장소', meta.locations], ['등장인물', meta.characters], ['연재 상태', meta.publication_status_label || '알 수 없음']] : []), ['책 소개', meta.summary], ['메타정보 잠금', Number(meta.metadata_locked) === 1 ? '잠김' : '잠금 해제']]);
+    const links = String(meta.link || '').split(/[,\n]+/).map(value => safeUrl(value.trim())).filter(Boolean);
+    const shortcut = $('[data-site-link]');
+    const external = links.find(link => /^https?:\/\//i.test(link) && !new URL(link).username && !new URL(link).password);
+    shortcut.hidden = !external;
+    shortcut.removeAttribute('href');
+    if (external) {
+      const host = new URL(external).hostname.replace(/^www\./, '');
+      const sites = {'ridibooks.com':'리디북스', 'ridi.com':'리디', 'yes24.com':'YES24', 'aladin.co.kr':'알라딘', 'kyobobook.co.kr':'교보문고', 'booklive.jp':'BookLive', 'amazon.co.jp':'Amazon', 'amazon.com':'Amazon', 'kakao.com':'카카오', 'naver.com':'네이버'};
+      const domain = Object.keys(sites).find(domain => host === domain || host.endsWith('.' + domain));
+      shortcut.textContent = `${sites[domain] || host} 바로가기`;
+      shortcut.title = shortcut.textContent;
+      shortcut.href = external;
+    }
     const linkIndex = fields.findIndex(([key]) => key === 'link');
-    if (link && linkIndex >= 0) {
+    if (links.length && linkIndex >= 0) {
       const dd = $('[data-metadata]').children[linkIndex + 1].querySelector('dd');
-      const anchor = node('a', '', meta.link);
-      anchor.href = link;
-      anchor.target = '_blank';
-      anchor.rel = 'noopener noreferrer';
-      dd.replaceChildren(anchor);
+      dd.replaceChildren(...links.map(link => {
+        const anchor = node('a', '', link); anchor.href = link;
+        anchor.target = '_blank'; anchor.rel = 'noopener noreferrer'; anchor.style.display = 'block'; return anchor;
+      }));
     }
   }
   function renderHeader() {
@@ -357,8 +476,8 @@
     favorite.title = '시리즈 즐겨찾기';
     favorite.querySelector('i').className = favorite.getAttribute('aria-pressed') === 'true' ? 'fa-solid fa-star' : 'fa-regular fa-star';
     $('[data-summary]').textContent = meta.summary || '등록된 책 소개가 없습니다.';
-    $('[data-summary]').classList.toggle('ds-clamped', String(meta.summary || '').length > 400);
-    $('[data-action=summary]').hidden = String(meta.summary || '').length <= 400;
+    $('[data-summary]').classList.remove('ds-clamped');
+    requestAnimationFrame(fitSummary);
     $('[data-action=summary]').setAttribute('aria-expanded', 'false');
     $('[data-action=summary]').textContent = '더 보기';
     facts($('[data-facts]'), [['출판사', meta.publisher], ['ISBN / WEB ID', meta.isbn], ['소장 도서', `${books.length}${unit}`], ['파일 크기', filesLoaded ? bytes(books.reduce((sum, book) => sum + num(extras.get(Number(book.id))?.file_size ?? book.file_size), 0)) : '확인 중'], ['평점', num(meta.score ?? meta.ratings) ? String(meta.score ?? meta.ratings) : '—'], ...(media ? [['재생 시간', `${Math.floor(num(meta.total_duration) / 3600)}시간 ${Math.floor(num(meta.total_duration) % 3600 / 60)}분`]] : [])]);
@@ -506,7 +625,6 @@
     if (!canEdit || saving) return;
     const form = event.currentTarget;
     const data = new FormData(form);
-    if (!media) data.set('books_lv', meta.books_lv || '');
     const file = data.get('cover_image');
     if (file?.size && (file.size > 10 * 1024 * 1024 || !['image/jpeg', 'image/png', 'image/webp'].includes(file.type))) return notify('표지는 10MB 이하의 JPG, PNG, WebP 파일을 선택해 주세요.', true);
     if (!file?.size) data.delete('cover_image');
@@ -514,7 +632,7 @@
     if (link && !/^https?:\/\//i.test(link)) return notify('관련 링크는 http:// 또는 https:// 주소로 입력해 주세요.', true);
     data.set('type', type); data.set('series', meta.series_name || context.seriesName);
     saving = true;
-    all('[data-edit-form] button, [data-edit-form] input, [data-edit-form] textarea').forEach((el) => { el.disabled = true; });
+    all('[data-edit-form] button, [data-edit-form] input, [data-edit-form] textarea, [data-edit-form] select').forEach((el) => { el.disabled = true; });
     try {
       await request('/api/media/detail/edit', { method: 'POST', body: data });
       if (!root.isConnected) return;
@@ -533,12 +651,13 @@
     } catch (error) { if (root.isConnected) notify(`저장하지 못했습니다. 입력 내용은 유지됩니다. ${error.message}`, true); }
     finally {
       saving = false;
-      all('[data-edit-form] button, [data-edit-form] input, [data-edit-form] textarea').forEach((el) => { el.disabled = false; });
+      all('[data-edit-form] button, [data-edit-form] input, [data-edit-form] textarea, [data-edit-form] select').forEach((el) => { el.disabled = false; });
     }
   }
   try {
     const { state } = await import('/static/js/state.js');
     if (!root.isConnected) return;
+    coreState = state;
     type = state.currentLibraryType;
     if (!['general', 'adult', 'audiobook', 'video'].includes(type)) throw new Error('지원하지 않는 서재 유형입니다.');
     media = type === 'audiobook' || type === 'video';
@@ -569,9 +688,17 @@
       try { localStorage.setItem(`${pluginId}:appearance`, JSON.stringify(appearance)); } catch { /* 현재 페이지의 선택은 유지한다. */ }
       renderAppearance();
     }));
+    if (!media) fields.splice(4, 0, ['books_lv', '도서 등급 (books_lv)']);
     for (const [key, label] of fields) {
-      const field = node('label', 'ds-field', label), input = node('input');
-      input.name = key; input.type = key === 'link' ? 'url' : 'text'; input.maxLength = key === 'link' ? 2000 : 4000;
+      const field = node('label', 'ds-field', label), input = node(key === 'books_lv' ? 'select' : 'input');
+      if (key === 'books_lv') {
+        for (const value of ['', 'everyone', '일반', 'ma15+', 'm', '15세', 'r18', 'adult only', '18세']) {
+          const option = node('option', '', value || '미지정 (전체이용가)');
+          option.value = value; input.append(option);
+        }
+      }
+      input.name = key;
+      if (key !== 'books_lv') { input.type = key === 'link' ? 'url' : 'text'; input.maxLength = key === 'link' ? 2000 : 4000; }
       field.append(input); $('[data-edit-fields]').append(field);
     }
     all('[data-tab]').forEach((button) => button.addEventListener('click', () => selectTab(button.dataset.tab)));
@@ -605,7 +732,7 @@
     $('[data-action=summary]').addEventListener('click', (event) => {
       const expanded = event.currentTarget.getAttribute('aria-expanded') !== 'true';
       event.currentTarget.setAttribute('aria-expanded', String(expanded)); event.currentTarget.textContent = expanded ? '접기' : '더 보기';
-      $('[data-summary]').classList.toggle('ds-clamped', !expanded);
+      fitSummary();
     });
     $('[data-action=favorite]').addEventListener('click', async (event) => {
       const button = event.currentTarget, selected = button.getAttribute('aria-pressed') !== 'true';
@@ -644,14 +771,19 @@
     const beforeUnload = (event) => { if (root.isConnected && (dirty || saving)) { event.preventDefault(); event.returnValue = ''; } };
     document.addEventListener('click', stopNavigation, true);
     window.addEventListener('beforeunload', beforeUnload);
+    const summaryObserver = new ResizeObserver(fitSummary);
+    summaryObserver.observe($('.ds-facts'));
+    summaryObserver.observe($('.ds-overview-grid'));
     const observer = new MutationObserver(() => {
       if (root.isConnected) return;
-      document.removeEventListener('click', stopNavigation, true); window.removeEventListener('beforeunload', beforeUnload); observer.disconnect();
+      document.removeEventListener('click', stopNavigation, true); window.removeEventListener('beforeunload', beforeUnload); observer.disconnect(); summaryObserver.disconnect(); clearTimeout(noticeTimer);
     });
     observer.observe(container.parentNode || document.body, { childList: true, subtree: true });
     bindBookMenu($('.ds-cover'), books[0]);
+    setupPreferences();
     renderHeader(); renderSeries(); renderFiles();
     root.dataset.ready = 'true';
     await loadFiles();
+    loadRating();
   } catch (error) { notify(`상세 화면을 불러오지 못했습니다. ${error.message}`, true); }
 })();

@@ -8,6 +8,7 @@
     <button type="button" role="tab" id="ds-tab-files" aria-controls="ds-panel-files" aria-selected="false" tabindex="-1" data-tab="files">파일 <span data-count></span></button>
     <button type="button" role="tab" id="ds-tab-similar" aria-controls="ds-panel-similar" aria-selected="false" tabindex="-1" data-tab="similar">유사한 책</button>
     <button type="button" role="tab" id="ds-tab-metadata" aria-controls="ds-panel-metadata" aria-selected="false" tabindex="-1" data-tab="metadata">메타정보</button>
+    <button type="button" role="tab" id="ds-tab-settings" aria-controls="ds-panel-settings" aria-selected="false" tabindex="-1" data-tab="settings">설정</button>
   </nav>
   <div class="ds-appearance" role="group" aria-label="상세 배경 옵션">
     <label><input type="checkbox" role="switch" data-effect="banner">배너</label>
@@ -22,7 +23,10 @@
         <button type="button" class="ds-button" data-action="favorite" aria-pressed="false"><i class="fa-regular fa-star" aria-hidden="true"></i><span>즐겨찾기</span></button>
         <button type="button" class="ds-button" data-action="collection" title="컬렉션에 추가"><i class="fa-solid fa-layer-group" aria-hidden="true"></i><span>컬렉션</span></button>
       </div>
+      <div class="ds-rail-actions ds-rail-file-actions">
       <button type="button" class="ds-button ds-files-button" data-action="show-files"><i class="fa-regular fa-folder-open" aria-hidden="true"></i><span>파일</span></button>
+      <a class="ds-button ds-site-link" data-site-link target="_blank" rel="noopener noreferrer" hidden></a>
+      </div>
       <div class="ds-rail-note"><span class="ds-eyebrow">MY READING</span><div class="ds-between"><strong data-reading-state>읽기 전</strong><span data-percent></span></div><progress data-series-progress max="100" value="0" aria-label="시리즈 독서 진행률"></progress><small data-reading-caption></small></div>
       <p class="ds-notice" data-notice role="status" aria-live="polite" hidden></p>
     </aside>
@@ -31,6 +35,7 @@
         <div class="ds-kicker"><span data-library-path>LIBRARY</span><span class="ds-pill" data-format></span></div>
         <h1 data-title></h1>
         <p class="ds-byline" data-byline></p>
+        <div class="ds-status-row"><div class="ds-chips ds-statuses" data-statuses></div><div class="ds-stars" data-stars role="group" aria-label="도서 평점"></div></div>
         <div class="ds-chips" data-chips></div>
       </header>
       <section id="ds-panel-overview" role="tabpanel" aria-labelledby="ds-tab-overview" class="ds-panel">
@@ -64,6 +69,12 @@
           <div class="ds-edit-grid"><article class="ds-card"><div class="ds-section-label">기본 정보</div><div data-edit-fields></div><label class="ds-field">표지 이미지<input type="file" name="cover_image" accept="image/jpeg,image/png,image/webp"><small>JPG, PNG, WebP · 최대 10MB</small></label></article><article class="ds-card"><label class="ds-field ds-description-field">책 소개<textarea name="summary" rows="16" maxlength="50000"></textarea></label></article></div>
           <div class="ds-savebar"><span>저장한 정보는 메타데이터 잠금 상태로 유지됩니다.</span><div><button type="button" class="ds-button" data-action="cancel-edit">취소</button><button type="submit" class="ds-button ds-primary">변경사항 저장</button></div></div>
         </form>
+      </section>
+      <section id="ds-panel-settings" role="tabpanel" aria-labelledby="ds-tab-settings" class="ds-panel" hidden>
+        <h2>표지 크기</h2><p class="ds-hint">현재 브라우저에 저장되며 모든 도서 상세페이지에 적용됩니다. 단위는 px입니다.</p>
+        <div class="ds-size-settings" data-size-settings></div>
+        <button type="button" class="ds-button" data-size-reset>기본 크기로 복원</button>
+        <div class="ds-card ds-size-preview"><span>미리보기</span><div data-size-preview></div></div>
       </section>
     </main>
   </div>
