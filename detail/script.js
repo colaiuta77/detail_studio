@@ -10,7 +10,7 @@
   let coreState;
   let type, activeTab = 'overview', filesLoaded = false, similarLoaded = false, loadingSimilar = false;
   let extras = new Map(), canEdit = false, editScope = null, dirty = false, saving = false;
-  const appearance = { banner: false, colorscape: false };
+  const appearance = { banner: false, colorscape: false, blur: false };
   try {
     const saved = JSON.parse(localStorage.getItem(`${pluginId}:appearance`));
     for (const key of Object.keys(appearance)) appearance[key] = saved?.[key] === true;
@@ -19,6 +19,8 @@
   let media = false, unit = '권', canDownload = false, libraryName = '', libraryId = null;
   const libraryTypes = { general: '일반도서', adult: '성인도서', audiobook: '오디오북', video: '영상강좌' };
   let fields = [['series_alias', '표시 제목'], ['author', '작가'], ['publisher', '출판사'], ['isbn', 'ISBN / WEB ID'], ['genre', '장르'], ['tags', '태그'], ['link', '관련 링크']];
+  const extraFields = [['cover_artist', '그림 작가'], ['teams', '팀'], ['locations', '장소'], ['characters', '등장인물'], ['publication_status', '연재 상태'], ['publication_start_date', '연재 시작일'], ['publication_end_date', '연재 종료일'], ['release_date', '출간일'], ['manual_chapter_count', '회차 수']];
+  let extendedReady = false, contentKind = '', contentKindName = '';
   const title = (book) => book.title_alias || book.title || '제목 없음';
   const num = (value) => Number.isFinite(Number(value)) ? Math.max(0, Number(value)) : 0;
   const completed = (book) => Number(media ? (book.is_track_completed ?? book.is_episode_completed ?? book.is_completed) : book.is_completed) === 1;
@@ -104,6 +106,11 @@
   function renderAppearance() {
     all('[data-effect]').forEach((el) => { el.checked = appearance[el.dataset.effect]; });
     const coverSrc = safeUrl(meta.cover_image || books[0]?.cover_image, true);
+    const blur = $('[data-cover-blur]');
+    root.dataset.coverBlur = String(appearance.blur && !!coverSrc);
+    blur.hidden = !appearance.blur || !coverSrc;
+    if (!blur.hidden) blur.src = coverSrc;
+    blur.onerror = () => { blur.hidden = true; root.dataset.coverBlur = 'false'; };
     const bannerSrc = safeUrl(meta.banner_image, true) || coverSrc;
     const banner = $('[data-banner]');
     root.dataset.bannerEnabled = String(appearance.banner && !!bannerSrc);
@@ -141,6 +148,9 @@
   function renderChips() {
     $('[data-chips]').replaceChildren();
     $('[data-statuses]').replaceChildren();
+    $('[data-age-rating]').replaceChildren();
+    $('[data-age-row]').hidden = true;
+    $('[data-publication-row]').hidden = media;
     const level = Number(meta.content_rating_level);
     if (coreState?.showContentRatingBadge === true && Number.isFinite(level)) {
       const badge = node('span', 'ds-chip ds-rating');
@@ -149,7 +159,8 @@
       const shield = node('i', 'fa-solid fa-shield-halved');
       shield.setAttribute('aria-hidden', 'true');
       badge.append(shield, document.createTextNode(meta.content_rating_label || (level === 0 ? '전체이용가' : level === 15 ? '15세이상' : '18세이상(성인)')));
-      $('[data-statuses]').append(badge);
+      $('[data-age-rating]').append(badge);
+      $('[data-age-row]').hidden = false;
     }
     if (!media) {
       const label = meta.publication_status_label || '알 수 없음';
@@ -182,11 +193,23 @@
     noticeTimer = setTimeout(() => { el.hidden = true; }, error ? 7000 : 4000);
   }
   async function request(url, options = {}) {
-    const response = await fetch(url, { credentials: 'same-origin', signal: AbortSignal.timeout(20000), ...options });
-    let data;
-    try { data = await response.json(); } catch { throw new Error('서버 응답을 읽지 못했습니다. 로그인 상태를 확인해 주세요.'); }
-    if (!response.ok || !data.success) throw new Error(data.error || data.message || `요청 실패 (${response.status})`);
-    return data;
+    const readOnly = (options.method || 'GET').toUpperCase() === 'GET';
+    for (let attempt = 0; ; attempt++) {
+      try {
+        let response;
+        try { response = await fetch(url, { credentials: 'same-origin', signal: AbortSignal.timeout(20000), ...options }); }
+        catch { throw Object.assign(new Error('서버에 연결하지 못했거나 응답 시간이 초과되었습니다.'), {retryable:true}); }
+        if (response.status === 401 || (response.redirected && /\/login\/?$/.test(new URL(response.url).pathname))) throw new Error('로그인이 필요합니다. 로그인 상태를 확인해 주세요.');
+        let data;
+        try { data = await response.json(); }
+        catch { throw Object.assign(new Error(`서버가 올바른 데이터 응답을 반환하지 않았습니다. (HTTP ${response.status})`), {retryable:response.status !== 403}); }
+        if (!response.ok || !data?.success) throw Object.assign(new Error(data?.error || data?.message || `요청 실패 (${response.status})`), {retryable:response.status >= 500});
+        return data;
+      } catch (error) {
+        if (!readOnly || attempt > 0 || !error.retryable || !root.isConnected) throw error;
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+    }
   }
   function apiUrl(mode) {
     return `/api/media/dashboard/widgets/${encodeURIComponent(pluginId)}/data?` + new URLSearchParams({ type, book_id: media ? meta.id : books[0].id, mode, limit: 18 });
@@ -212,6 +235,14 @@
     if (!allowNavigation()) return;
     window.openReader(Number(book.id), book.file_format, title(book), num(book.pages_read), num(book.total_pages));
   }
+  function canListen(book) {
+    return ['general', 'adult'].includes(type) && !!book && typeof window.openListen === 'function' && typeof window.canListen === 'function' && window.canListen(book.file_format);
+  }
+  async function listen(book) {
+    if (!canListen(book) || !allowNavigation()) return;
+    try { await window.openListen(Number(book.id), type); }
+    catch { notify('듣기 화면을 열지 못했습니다. 다시 시도해 주세요.', true); }
+  }
   function setupPreferences() {
     const sizes = {};
     try { Object.assign(sizes, JSON.parse(localStorage.getItem(`${pluginId}:sizes`) || '{}')); } catch {}
@@ -235,8 +266,8 @@
       for (const input of [range, number]) {
         input.min = min; input.max = max; input.value = sizes[key] || fallback;
         input.setAttribute('aria-label', label);
-        input.addEventListener('input', () => {
-          if (!input.value || !Number.isFinite(Number(input.value))) return;
+        input.addEventListener(input === range ? 'input' : 'change', () => {
+          if (!input.value || !Number.isFinite(Number(input.value))) { input.value = sizes[key] || fallback; return; }
           const value = Math.min(max, Math.max(min, Number(input.value)));
           sizes[key] = value; range.value = number.value = value;
           root.style.setProperty(`--ds-${key}-size`, `${value}px`);
@@ -256,16 +287,121 @@
     });
     updatePreview();
   }
+  function setupMenuAutoHide() {
+    const input = $('[data-auto-hide-menu]'), bar = $('.ds-topbar');
+    const desktop = window.matchMedia('(min-width:701px) and (hover:hover)');
+    let timer;
+    try { input.checked = localStorage.getItem(`${pluginId}:auto-hide-menu`) === 'true'; } catch {}
+    const reset = () => {
+      clearTimeout(timer);
+      root.dataset.menuHidden = 'false';
+      if (!input.checked || !desktop.matches) return;
+      timer = setTimeout(() => {
+        if (!bar.matches(':hover') && !bar.contains(document.activeElement)) root.dataset.menuHidden = 'true';
+      }, 5000);
+    };
+    input.addEventListener('change', () => {
+      try { localStorage.setItem(`${pluginId}:auto-hide-menu`, String(input.checked)); } catch {}
+      reset();
+    });
+    root.addEventListener('click', reset);
+    for (const event of ['mouseenter', 'mouseleave', 'focusin', 'focusout']) bar.addEventListener(event, reset);
+    desktop.addEventListener('change', reset);
+    reset();
+    return () => { clearTimeout(timer); desktop.removeEventListener('change', reset); };
+  }
+  function setupLayout() {
+    const rail = $('[data-rail-details]'), overview = $('.ds-overview-grid');
+    const factsCard = $('.ds-facts'), heading = $('.ds-heading'), ratings = $('.ds-detail-ratings'), chips = $('[data-chips]');
+    const choice = $('select[data-info-position]');
+    const mobile = window.matchMedia('(max-width:700px)');
+    const panel = $('#ds-panel-overview'), shelf = $('[data-preview-books]'), shelfHeading = shelf.previousElementSibling;
+    try { choice.value = localStorage.getItem(`${pluginId}:info-position`) === 'cover' ? 'cover' : 'header'; } catch {}
+    const apply = () => {
+      const below = choice.value === 'cover';
+      root.dataset.infoPosition = choice.value;
+      (below && !mobile.matches ? rail : overview).append(factsCard);
+      (below ? factsCard : heading).append(ratings, chips);
+      factsCard.append($('[data-site-link]'));
+      if (mobile.matches) {
+        $('.ds-layout').prepend(heading);
+        panel.append(shelfHeading, shelf, $('#ds-panel-similar'), factsCard);
+      } else {
+        $('.ds-main').prepend(heading);
+        panel.append(shelfHeading, shelf, $('#ds-panel-similar'));
+      }
+      requestAnimationFrame(fitSummary);
+    };
+    choice.addEventListener('change', () => { apply(); try { localStorage.setItem(`${pluginId}:info-position`, choice.value); } catch {} });
+    $('[data-edit-shortcut]').addEventListener('click', () => { if (!canEdit || saving) return; selectTab('metadata'); if ($('[data-edit-form]').hidden) editMode(true); });
+    apply();
+    mobile.addEventListener('change', apply);
+    const back = container.closest('#book-detail-view')?.querySelector(':scope > .btn-back-to-list');
+    if (!back) return () => mobile.removeEventListener('change', apply);
+    const marker = document.createComment('Detail Studio back button'); back.before(marker);
+    $('[data-back-slot]').hidden = false; $('[data-back-slot]').append(back);
+    return () => { mobile.removeEventListener('change', apply); if (marker.isConnected) marker.replaceWith(back); };
+  }
+  let collectionLoading = false, collectionWriting = false;
+  async function toggleCollections() {
+    const panel = $('[data-collection-menu]'), toggle = $('[data-action=collection]');
+    if (saving || collectionWriting || !books.length) return;
+    panel.hidden = !panel.hidden; toggle.setAttribute('aria-expanded', String(!panel.hidden));
+    if (panel.hidden || collectionLoading) return;
+    collectionLoading = true;
+    panel.replaceChildren(node('p', '', '컬렉션을 불러오는 중…'));
+    const params = new URLSearchParams({db_type:type});
+    const payload = media ? {[type === 'audiobook' ? 'audiobook_id' : 'video_id']: Number(meta.id)} : {series_name:meta.series_name || context.seriesName};
+    const add = async (id, items = []) => {
+      if (saving || collectionWriting) return;
+      collectionWriting = true;
+      panel.querySelectorAll('button').forEach(button=>{button.disabled=true;});
+      try {
+        if (items.length) {
+          for (const item of items) await request(`/api/v1/collections/${encodeURIComponent(id)}/items/${encodeURIComponent(item.id)}?${params}`, {method:'DELETE'});
+        } else await request(`/api/v1/collections/${encodeURIComponent(id)}/items?${params}`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+        panel.hidden = true; toggle.setAttribute('aria-expanded','false'); notify(items.length ? '컬렉션에서 제거했습니다.' : '컬렉션에 추가했습니다.');
+      } catch(error) { panel.hidden = true; toggle.setAttribute('aria-expanded','false'); notify(error.message + ' 컬렉션을 다시 열어 현재 상태를 확인해 주세요.', true); }
+      finally { collectionWriting = false; panel.querySelectorAll('button').forEach(button=>{button.disabled=false;}); }
+    };
+    try {
+      const data = await request('/api/v1/collections?' + params);
+      const collections = await Promise.all((data.collections || []).map(async collection => {
+        const detail = await request(`/api/v1/collections/${encodeURIComponent(collection.id)}?${params}`);
+        if (!Array.isArray(detail.collection?.items)) throw new Error('컬렉션 포함 상태를 확인하지 못했습니다.');
+        return {...collection, items: detail.collection.items.filter(item => media ? Number(item[type === 'audiobook' ? 'audiobook_id' : 'video_id']) === Number(meta.id) : item.series_name === payload.series_name || books.some(book => Number(book.id) === Number(item.book_id)))};
+      }));
+      if (!root.isConnected) return;
+      panel.replaceChildren();
+      for (const collection of collections) {
+        const button = node('button', 'ds-collection-option', `${collection.name} · ${num(collection.item_count)}개`); button.type='button';
+        const dot = node('span', 'ds-collection-color'); dot.setAttribute('aria-hidden', 'true');
+        dot.style.backgroundColor = CSS.supports('color', collection.color) ? collection.color : '#7c3aed';
+        button.prepend(dot);
+        button.setAttribute('aria-pressed', String(collection.items.length > 0));
+        button.title = collection.items.length ? '클릭하여 컬렉션에서 제거' : '클릭하여 컬렉션에 추가';
+        if (collection.items.length) button.append(icon('check'));
+        button.addEventListener('click',()=>add(collection.id, collection.items)); panel.append(button);
+      }
+      if (!data.collections?.length) panel.append(node('p','','아직 컬렉션이 없습니다.'));
+      const create = node('button','ds-collection-option','+ 새 컬렉션'); create.type='button';
+      create.addEventListener('click', async()=>{
+        try { const {openCreateCollectionModal} = await import('/static/js/tab_collections.js'); if(root.isConnected) openCreateCollectionModal(id => add(id)); }
+        catch { notify('컬렉션 만들기를 열지 못했습니다.',true); }
+      }); panel.append(create);
+    } catch(error) { panel.replaceChildren(node('p','',error.message)); }
+    finally { collectionLoading=false; }
+  }
   async function loadRating() {
     const target = $('[data-stars]');
-    const score = Math.max(0, Math.min(5, Math.round(num(meta.score) / 20)));
-    const starIcon = filled => {
-      const star = node('i', `fa-${filled ? 'solid' : 'regular'} fa-star`);
+    const score = Math.max(0, Math.min(5, Math.round(num(meta.score) / 10) / 2));
+    const starIcon = (filled, half = false) => {
+      const star = node('i', half ? 'fa-solid fa-star-half-stroke' : `fa-${filled ? 'solid' : 'regular'} fa-star`);
       star.setAttribute('aria-hidden', 'true');
       return star;
     };
     target.setAttribute('aria-label', `도서 평점 ${score}점 / 5점`);
-    target.replaceChildren(...[1,2,3,4,5].map(value => starIcon(value <= score)));
+    target.replaceChildren(...[1,2,3,4,5].map(value => starIcon(value <= score, value > score && value - .5 === score)));
     if (type !== 'general') return;
     const ratingContext = {seriesName: meta.series_name || context.seriesName, libraryId: libraryId ?? context.libraryId, bookId: books[0]?.id, author: meta.author || '', isbn: meta.isbn || ''};
     try {
@@ -274,10 +410,11 @@
       if (!root.isConnected || !data.success) return;
       let submitting = false;
       function draw() {
-        const mine = Math.max(0, Math.min(5, Math.round(num(data.my_rating))));
+        const mine = Math.max(0, Math.min(5, Math.round(num(data.my_rating) * 2) / 2));
         target.setAttribute('aria-label', `내 평점 ${mine}점 / 5점`);
-        target.replaceChildren(...[1,2,3,4,5].map(value => {
-          const button = node('button'); button.type = 'button'; button.append(starIcon(value <= mine));
+        target.replaceChildren(...Array.from({length:10}, (_,i)=>(i+1)/2).map(value => {
+          const button = node('button', `ds-star-half ${Number.isInteger(value) ? 'ds-star-right' : 'ds-star-left'}`); button.type = 'button'; button.append(starIcon(value <= mine));
+          button.title = `${value}점`;
           button.disabled = submitting;
           button.setAttribute('aria-label', `${value}점`); button.setAttribute('aria-pressed', String(value === mine));
           button.addEventListener('click', async () => {
@@ -286,7 +423,7 @@
             try {
               const result = await api.submitRating(type, ratingContext, value);
               if (!result.success) throw new Error(result.error || '별점 저장에 실패했습니다.');
-              data = result;
+              data = {...data, ...result};
             } catch (error) { if (root.isConnected) notify(error.message || '별점 저장에 실패했습니다.', true); }
             finally { submitting = false; if (root.isConnected) draw(); }
           });
@@ -303,7 +440,7 @@
     const info = $('.ds-facts').getBoundingClientRect(), box = card.getBoundingClientRect();
     const style = getComputedStyle(card);
     const overhead = paragraph.getBoundingClientRect().top - box.top + parseFloat(style.paddingBottom) + parseFloat(style.borderBottomWidth);
-    const available = Math.abs(info.top - box.top) < 2 ? info.height - overhead : parseFloat(getComputedStyle(paragraph).lineHeight) * 7;
+    const available = root.dataset.infoPosition !== 'cover' && Math.abs(info.top - box.top) < 2 ? info.height - overhead : parseFloat(getComputedStyle(paragraph).lineHeight) * 7;
     const overflow = paragraph.scrollHeight > available + 1;
     button.hidden = !overflow;
     const reserve = overflow ? button.offsetHeight + parseFloat(getComputedStyle(button).marginTop) : 0;
@@ -312,19 +449,45 @@
   }
   function bindBookMenu(target, book) {
     if (media || !book) return;
-    target.title = `${title(book)} · 우클릭으로 도서 메뉴`;
-    target.addEventListener('contextmenu', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
+    target.title = `${title(book)} · 우클릭 또는 길게 눌러 도서 메뉴`;
+    target.classList.add('ds-book-menu-target');
+    let suppressClickUntil = 0;
+    const showMenu = (x, y) => {
+      if (!target.isConnected) return;
       if (dirty || saving) return notify('편집을 저장하거나 취소한 후 도서 메뉴를 열어 주세요.');
       if (typeof window.showBookContextMenu !== 'function') return notify('코어 도서 메뉴를 연결하지 못했습니다. 페이지를 새로고침해 주세요.', true);
-      window.showBookContextMenu(event.clientX, event.clientY, Number(book.id), title(book), true, {
+      window.showBookContextMenu(x, y, Number(book.id), title(book), true, {
         seriesName: meta.series_name || context.seriesName,
         libraryId: book.library_id ?? libraryId ?? context.libraryId,
         markUnreadScope: 'book',
       });
       notify('메뉴에서 표지·메타정보·읽기 상태를 변경했다면 상세페이지를 다시 열어 최신 정보를 확인해 주세요.');
+    };
+    target.addEventListener('contextmenu', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (Date.now() >= suppressClickUntil) showMenu(event.clientX, event.clientY);
     });
+    target.addEventListener('touchstart', event => {
+      if (event.target.closest('.ds-book-listen')) return;
+      window.handleLongPressTouchStart?.(event, (x, y) => {
+        suppressClickUntil = Date.now() + 900;
+        showMenu(x, y);
+      });
+    }, {passive:false});
+    target.addEventListener('touchmove', event => window.handleLongPressTouchMove?.(event), {passive:true});
+    for (const name of ['touchend', 'touchcancel']) target.addEventListener(name, event => {
+      window.handleLongPressTouchEnd?.(event);
+      if (Date.now() < suppressClickUntil) {
+        suppressClickUntil = Date.now() + 900;
+        if (event.cancelable) event.preventDefault();
+      }
+    }, {passive:false});
+    target.addEventListener('click', event => {
+      if (Date.now() >= suppressClickUntil) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }, true);
   }
   function bookCard(book, index, recommended = false) {
     const card = node('article', 'ds-book');
@@ -335,7 +498,7 @@
     const art = image(recommended ? book.cover : book.cover_image);
     if (!recommended) {
       button.classList.add('ds-readable');
-      bindBookMenu(art, book);
+      bindBookMenu(card, book);
       art.append(node('span', 'ds-book-number', String(index + 1).padStart(2, '0')));
       const overlay = node('span', 'ds-book-overlay');
       overlay.setAttribute('aria-hidden', 'true');
@@ -361,6 +524,14 @@
       button.addEventListener('click', () => read(book));
     }
     card.append(button);
+    if (!recommended && canListen(book)) {
+      const audio = node('button', 'ds-button ds-listen ds-book-listen');
+      audio.type = 'button';
+      audio.setAttribute('aria-label', `${label} 듣기`);
+      audio.append(icon('headphones'), document.createTextNode('듣기'));
+      audio.addEventListener('click', event => { event.stopPropagation(); listen(book); });
+      card.append(audio);
+    }
     if (recommended) {
       const reasons = node('div', 'ds-reasons');
       for (const reason of book.reasons || []) reasons.append(node('span', '', reason));
@@ -377,7 +548,7 @@
     }
   }
   function metadataView() {
-    facts($('[data-metadata]'), [['시리즈명', meta.series_name || context.seriesName], ...fields.map(([key, label]) => [label, meta[key]]), ...(!media ? [['그림 작가', meta.cover_artist], ['팀', meta.teams], ['장소', meta.locations], ['등장인물', meta.characters], ['연재 상태', meta.publication_status_label || '알 수 없음']] : []), ['책 소개', meta.summary], ['메타정보 잠금', Number(meta.metadata_locked) === 1 ? '잠김' : '잠금 해제']]);
+    facts($('[data-metadata]'), [['시리즈명', meta.series_name || context.seriesName], ...fields.map(([key, label]) => [label, key === 'publication_status' ? meta.publication_status_label || '알 수 없음' : meta[key]]), ...(!media ? [['카테고리 속성', contentKindName || contentKind || '미지정']] : []), ['책 소개', meta.summary], ['메타정보 잠금', Number(meta.metadata_locked) === 1 ? '잠김' : '잠금 해제']]);
     const links = String(meta.link || '').split(/[,\n]+/).map(value => safeUrl(value.trim())).filter(Boolean);
     const shortcut = $('[data-site-link]');
     const external = links.find(link => /^https?:\/\//i.test(link) && !new URL(link).username && !new URL(link).password);
@@ -387,8 +558,13 @@
       const host = new URL(external).hostname.replace(/^www\./, '');
       const sites = {'ridibooks.com':'리디북스', 'ridi.com':'리디', 'yes24.com':'YES24', 'aladin.co.kr':'알라딘', 'kyobobook.co.kr':'교보문고', 'booklive.jp':'BookLive', 'amazon.co.jp':'Amazon', 'amazon.com':'Amazon', 'kakao.com':'카카오', 'naver.com':'네이버'};
       const domain = Object.keys(sites).find(domain => host === domain || host.endsWith('.' + domain));
-      shortcut.textContent = `${sites[domain] || host} 바로가기`;
-      shortcut.title = shortcut.textContent;
+      const label = `${sites[domain] || host} 바로가기`;
+      shortcut.title = label; shortcut.setAttribute('aria-label', label);
+      const favicon = node('img'); favicon.alt = ''; favicon.width = 20; favicon.height = 20;
+      favicon.referrerPolicy = 'no-referrer';
+      favicon.addEventListener('error', () => favicon.replaceWith(icon('arrow-up-right-from-square')), {once:true});
+      favicon.src = new URL('/favicon.ico', external).href;
+      shortcut.replaceChildren(favicon);
       shortcut.href = external;
     }
     const linkIndex = fields.findIndex(([key]) => key === 'link');
@@ -470,6 +646,8 @@
     const next = continueBook();
     $('[data-read-label]').textContent = media ? (next && reading(next) ? '이어 재생' : done && done === books.length ? '다시 재생' : '재생 시작') : next && reading(next) ? '이어 읽기' : done && done === books.length ? '다시 읽기' : '첫 미독 도서 읽기';
     $('[data-action=read]').disabled = !next;
+    $('[data-listen-first]').hidden = !canListen(books[0]);
+    $('[data-listen-first]').onclick = () => listen(books[0]);
     const favorite = $('[data-action=favorite]');
     favorite.disabled = !books.length;
     favorite.setAttribute('aria-pressed', String(books.length > 0 && books.every((book) => Number(book.is_favorite) === 1)));
@@ -480,7 +658,7 @@
     requestAnimationFrame(fitSummary);
     $('[data-action=summary]').setAttribute('aria-expanded', 'false');
     $('[data-action=summary]').textContent = '더 보기';
-    facts($('[data-facts]'), [['출판사', meta.publisher], ['ISBN / WEB ID', meta.isbn], ['소장 도서', `${books.length}${unit}`], ['파일 크기', filesLoaded ? bytes(books.reduce((sum, book) => sum + num(extras.get(Number(book.id))?.file_size ?? book.file_size), 0)) : '확인 중'], ['평점', num(meta.score ?? meta.ratings) ? String(meta.score ?? meta.ratings) : '—'], ...(media ? [['재생 시간', `${Math.floor(num(meta.total_duration) / 3600)}시간 ${Math.floor(num(meta.total_duration) % 3600 / 60)}분`]] : [])]);
+    facts($('[data-facts]'), [['출판사', meta.publisher], ['ISBN / WEB ID', meta.isbn], ['소장 도서', `${books.length}${unit}`], ['파일 크기', filesLoaded ? bytes(books.reduce((sum, book) => sum + num(extras.get(Number(book.id))?.file_size ?? book.file_size), 0)) : '확인 중'], ...(!media ? [['카테고리 속성', contentKindName || contentKind || '미지정'], ['그림 작가', meta.cover_artist], ...(contentKind === 'book' ? [['출간일',meta.release_date]] : [['연재 시작일',meta.publication_start_date],['연재 종료일',meta.publication_end_date]]), ['회차 수',meta.manual_chapter_count]] : []), ...(media ? [['재생 시간', `${Math.floor(num(meta.total_duration) / 3600)}시간 ${Math.floor(num(meta.total_duration) % 3600 / 60)}분`]] : [])]);
     const last = books.map((book) => book.last_read_at || '').sort().at(-1);
     $('[data-stats]').replaceChildren(...[[media ? '재생 완료' : '완독', `${done}${unit}`], [media ? '재생 중' : '읽는 중', `${inProgress}${unit}`], [media ? '남은 항목' : '남은 도서', `${books.length - done}${unit}`]].map(([label, value]) => {
       const stat = node('div', 'ds-stat');
@@ -495,7 +673,7 @@
       link.addEventListener('click', () => read(next, true));
       current.append(link);
     } else current.append(node('span', '', '등록된 도서가 없습니다.'));
-    $('[data-preview-books]').replaceChildren(...books.slice(0, 6).map((book, index) => bookCard(book, index)));
+    $('[data-preview-books]').replaceChildren(...books.map((book, index) => bookCard(book, index)));
     if (!books.length) $('[data-preview-books]').append(node('p', 'ds-empty', '이 시리즈에 표시할 도서가 없습니다.'));
     $('[data-series-description]').textContent = `총 ${books.length}${unit} · 표지를 눌러 바로 ${media ? '재생할' : '읽을'} 수 있어요.`;
     metadataView();
@@ -565,6 +743,13 @@
       canEdit = type !== 'video' && data.can_edit === true;
       editScope = data.edit_scope;
       libraryName = data.library_name || '';
+      contentKind = data.content_kind || ''; contentKindName = data.content_kind_name || '';
+      extendedReady = !media && !!data.extended_metadata;
+      if (extendedReady) {
+        Object.assign(meta, data.extended_metadata);
+        meta.publication_status_label = ({'0':'연재','1':'휴재','2':'완결'})[meta.publication_status] || '알 수 없음';
+      }
+      $('[data-edit-shortcut]').hidden = !canEdit;
       libraryId = data.library_id ?? null;
       canDownload = data.can_download === true;
       if (media) $('#ds-panel-files .ds-hint').textContent = '경로는 서버 기준입니다. 책 등록일은 개별 파일의 등록일이며, 제공되지 않는 날짜는 —로 표시합니다.';
@@ -603,7 +788,7 @@
       if (selected && focus) el.focus();
     });
     all('[role=tabpanel]').forEach((el) => { el.hidden = el.id !== `ds-panel-${tab}`; });
-    if (tab === 'similar') loadSimilar();
+    if (tab === 'overview') loadSimilar();
     if (tab === 'files' && !filesLoaded) loadFiles();
   }
   function editMode(on) {
@@ -615,6 +800,8 @@
     const form = $('[data-edit-form]');
     form.reset();
     for (const [key] of fields) form.elements[key].value = meta[key] || '';
+    for (const [key] of extraFields) if (form.elements[key]) form.elements[key].disabled = !extendedReady;
+    for (const key of ['publication_start_date','publication_end_date','release_date']) if(form.elements[key]) form.elements[key].closest('label').hidden = key === 'release_date' ? contentKind !== 'book' : contentKind === 'book';
     form.elements.summary.value = meta.summary || '';
     $('[data-edit-scope]').textContent = `‘${meta.series_name || context.seriesName}’ 시리즈 전체 ${editScope?.books ?? books.length}권에 적용됩니다.${num(editScope?.libraries) > 1 ? ` 같은 이름의 시리즈가 있는 ${editScope.libraries}개 서재가 함께 수정됩니다.` : ''}`;
     if (type === 'audiobook') $('[data-edit-scope]').textContent = `같은 제목 또는 폴더명의 오디오북 ${editScope?.books ?? 1}개, ${editScope?.libraries ?? 1}개 서재에 적용됩니다.`;
@@ -631,12 +818,19 @@
     const link = String(data.get('link') || '').trim();
     if (link && !/^https?:\/\//i.test(link)) return notify('관련 링크는 http:// 또는 https:// 주소로 입력해 주세요.', true);
     data.set('type', type); data.set('series', meta.series_name || context.seriesName);
+    if (!media && extendedReady) {
+      const start = data.get('publication_start_date'), end = data.get('publication_end_date');
+      if (start && end && start > end) return notify('연재 종료일이 시작일보다 빠릅니다.', true);
+    }
     saving = true;
     all('[data-edit-form] button, [data-edit-form] input, [data-edit-form] textarea, [data-edit-form] select').forEach((el) => { el.disabled = true; });
+    let coreSaved = false;
     try {
       await request('/api/media/detail/edit', { method: 'POST', body: data });
       if (!root.isConnected) return;
-      for (const [key] of fields) meta[key] = String(data.get(key) || '');
+      coreSaved = true;
+      if (!media && extendedReady) await request('/api/media/context-menu/book/plugins/action', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({plugin_id:pluginId, action_id:'save_metadata', type, context:{series_name:meta.series_name || context.seriesName, ...Object.fromEntries(extraFields.map(([key])=>[key,String(data.get(key) || '')]))}})});
+      for (const [key] of fields) if(data.has(key)) meta[key] = String(data.get(key) || '');
       meta.summary = String(data.get('summary') || ''); meta.metadata_locked = type === 'audiobook' ? 0 : 1;
       dirty = false; similarLoaded = false;
       // 저장 성공과 이후 새로고침 실패를 구분해 중복 저장을 피한다.
@@ -646,12 +840,12 @@
         if (result.meta) Object.assign(meta, result.meta);
       } catch { refreshed = false; }
       saving = false;
-      editMode(false); renderHeader();
+      editMode(false); await loadFiles(); renderHeader();
       notify(refreshed ? '시리즈 메타정보를 저장했습니다.' : '저장은 완료했습니다. 최신 표지는 페이지를 다시 열면 확인할 수 있습니다.');
-    } catch (error) { if (root.isConnected) notify(`저장하지 못했습니다. 입력 내용은 유지됩니다. ${error.message}`, true); }
+    } catch (error) { if (root.isConnected) notify(`${coreSaved ? '기본 정보는 저장됐지만 추가 정보 저장에 실패했습니다.' : '저장하지 못했습니다.'} 입력 내용은 유지됩니다. ${error.message}`, true); }
     finally {
       saving = false;
-      all('[data-edit-form] button, [data-edit-form] input, [data-edit-form] textarea, [data-edit-form] select').forEach((el) => { el.disabled = false; });
+      all('[data-edit-form] button, [data-edit-form] input, [data-edit-form] textarea, [data-edit-form] select').forEach((el) => { el.disabled = !extendedReady && extraFields.some(([key])=>key === el.name); });
     }
   }
   try {
@@ -675,7 +869,6 @@
       $('[data-series-search]').setAttribute('aria-label', '제목 검색');
       $('[data-series-filter]').setAttribute('aria-label', '재생 상태 필터');
       all('[data-series-filter] option').forEach((el, i) => { el.textContent = ['전체', '재생 중', '미재생', '재생 완료'][i]; });
-      $('[data-tab=similar]').textContent = '유사한 콘텐츠';
       $('#ds-panel-similar h2').textContent = type === 'audiobook' ? '함께 듣기 좋은 오디오북' : '함께 보기 좋은 비디오';
       $('#ds-panel-similar .ds-section-heading p').textContent = type === 'audiobook' ? '같은 작가의 오디오북을 골랐어요.' : '공통 장르의 비디오를 골랐어요.';
     }
@@ -688,17 +881,22 @@
       try { localStorage.setItem(`${pluginId}:appearance`, JSON.stringify(appearance)); } catch { /* 현재 페이지의 선택은 유지한다. */ }
       renderAppearance();
     }));
-    if (!media) fields.splice(4, 0, ['books_lv', '도서 등급 (books_lv)']);
+    if (!media) { fields.splice(4, 0, ['books_lv', '도서 등급 (books_lv)']); fields.push(...extraFields); }
     for (const [key, label] of fields) {
-      const field = node('label', 'ds-field', label), input = node(key === 'books_lv' ? 'select' : 'input');
+      const field = node('label', 'ds-field', label), input = node(['books_lv','publication_status'].includes(key) ? 'select' : 'input');
       if (key === 'books_lv') {
         for (const value of ['', 'everyone', '일반', 'ma15+', 'm', '15세', 'r18', 'adult only', '18세']) {
           const option = node('option', '', value || '미지정 (전체이용가)');
           option.value = value; input.append(option);
         }
       }
+      if (key === 'publication_status') {
+        for (const [value, text] of [['','알 수 없음'],['0','연재'],['1','휴재'],['2','완결']]) { const option = node('option', '', text); option.value = value; input.append(option); }
+      }
       input.name = key;
-      if (key !== 'books_lv') { input.type = key === 'link' ? 'url' : 'text'; input.maxLength = key === 'link' ? 2000 : 4000; }
+      if (!['books_lv','publication_status'].includes(key)) { input.type = key.endsWith('_date') ? 'date' : key === 'manual_chapter_count' ? 'number' : 'text'; input.maxLength = key === 'link' ? 2000 : 4000; }
+      if (key === 'manual_chapter_count') { input.min = '1'; input.max = '1000000'; input.step = '1'; }
+      if (key.endsWith('_date') || key === 'manual_chapter_count') field.append(node('small', '', 'Detail Studio 전용 값 · 코어 자동 스캔에는 적용되지 않습니다.'));
       field.append(input); $('[data-edit-fields]').append(field);
     }
     all('[data-tab]').forEach((button) => button.addEventListener('click', () => selectTab(button.dataset.tab)));
@@ -710,23 +908,8 @@
       selectTab(tabs[next].dataset.tab, true);
     });
     $('[data-action=read]').addEventListener('click', () => read(continueBook(), true));
-    $('[data-action=collection]').addEventListener('click', async (event) => {
-      if (saving || !books.length) return;
-      const button = event.currentTarget;
-      button.disabled = true;
-      try {
-        const { openAddToCollectionModal } = await import('/static/js/tab_collections.js');
-        if (!root.isConnected) return;
-        const item = { title: meta.series_alias || meta.series_name || context.seriesName };
-        if (media) {
-          const id = Number(meta.id);
-          if (!Number.isInteger(id) || id < 1) throw new Error('미디어 ID 없음');
-          item[type === 'audiobook' ? 'audiobook_id' : 'video_id'] = id;
-        } else item.series_name = meta.series_name || context.seriesName;
-        openAddToCollectionModal(item);
-      } catch { notify('컬렉션 선택 창을 열지 못했습니다. 새로고침 후 다시 시도해 주세요.', true); }
-      finally { button.disabled = !books.length; }
-    });
+    $('[data-action=collection]').addEventListener('click', toggleCollections);
+    $('[data-collection-menu]').addEventListener('keydown', event => { if(event.key === 'Escape') { $('[data-collection-menu]').hidden=true; $('[data-action=collection]').setAttribute('aria-expanded','false'); $('[data-action=collection]').focus(); } });
     $('[data-action=show-files]').addEventListener('click', () => selectTab('files', true));
     $('[data-action=show-series]').addEventListener('click', () => selectTab('series', true));
     $('[data-action=summary]').addEventListener('click', (event) => {
@@ -771,12 +954,14 @@
     const beforeUnload = (event) => { if (root.isConnected && (dirty || saving)) { event.preventDefault(); event.returnValue = ''; } };
     document.addEventListener('click', stopNavigation, true);
     window.addEventListener('beforeunload', beforeUnload);
+    const restoreBack = setupLayout();
+    const cleanupMenuAutoHide = setupMenuAutoHide();
     const summaryObserver = new ResizeObserver(fitSummary);
     summaryObserver.observe($('.ds-facts'));
     summaryObserver.observe($('.ds-overview-grid'));
     const observer = new MutationObserver(() => {
       if (root.isConnected) return;
-      document.removeEventListener('click', stopNavigation, true); window.removeEventListener('beforeunload', beforeUnload); observer.disconnect(); summaryObserver.disconnect(); clearTimeout(noticeTimer);
+      document.removeEventListener('click', stopNavigation, true); window.removeEventListener('beforeunload', beforeUnload); observer.disconnect(); summaryObserver.disconnect(); clearTimeout(noticeTimer); restoreBack(); cleanupMenuAutoHide();
     });
     observer.observe(container.parentNode || document.body, { childList: true, subtree: true });
     bindBookMenu($('.ds-cover'), books[0]);
@@ -785,5 +970,6 @@
     root.dataset.ready = 'true';
     await loadFiles();
     loadRating();
+    loadSimilar();
   } catch (error) { notify(`상세 화면을 불러오지 못했습니다. ${error.message}`, true); }
 })();

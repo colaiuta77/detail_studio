@@ -1,4 +1,5 @@
 # 도서 상세 탭에 필요한 파일 정보와 권한별 유사 도서를 제공합니다.
+from datetime import date
 import hashlib
 import json
 import re
@@ -6,7 +7,7 @@ import re
 from flask import has_request_context, request, session
 from plugins.metadata.base import BaseMetadataProvider
 
-PLUGIN_VERSION = '0.5.0'
+PLUGIN_VERSION = '0.9.0'
 
 
 def tokens(value):
@@ -29,6 +30,48 @@ class DetailStudioMetadataProvider(BaseMetadataProvider):
 
     def apply(self, db_type, book_id, item_data):
         return False, '상세 화면의 메타정보 탭에서 수정해 주세요.'
+
+    @staticmethod
+    def _extra_key(series):
+        return 'detail_studio:metadata:' + hashlib.sha256(series.encode()).hexdigest()
+
+    def run_context_menu_action(self, db_type, action_id, context):
+        if not has_request_context() or not session.get('user_id') or session.get('role') != 'admin' or session.get('is_default_password') == 1:
+            return {'success': False, 'error': '관리자만 추가 메타정보를 수정할 수 있습니다.'}
+        if db_type not in ('general', 'adult') or action_id != 'save_metadata' or not isinstance(context, dict):
+            return {'success': False, 'error': '지원하지 않는 요청입니다.'}
+        series = context.get('series_name')
+        if not isinstance(series, str) or not series.strip() or len(series) > 4000:
+            return {'success': False, 'error': '올바른 시리즈명이 필요합니다.'}
+        fields = ('cover_artist', 'teams', 'locations', 'characters', 'publication_status')
+        values = {key: context.get(key, '') for key in fields}
+        dates = {key: context.get(key, '') for key in ('publication_start_date', 'publication_end_date', 'release_date')}
+        if any(not isinstance(value, str) or len(value) > 4000 for value in [*values.values(), *dates.values()]):
+            return {'success': False, 'error': '메타정보 형식이나 길이를 확인해 주세요.'}
+        if values['publication_status'] not in ('', '0', '1', '2'):
+            return {'success': False, 'error': '올바른 연재 상태를 선택해 주세요.'}
+        try:
+            for value in dates.values():
+                if value and (len(value) != 10 or date.fromisoformat(value).isoformat() != value):
+                    raise ValueError()
+            count = context.get('manual_chapter_count', '')
+            if not isinstance(count, str) or (count and (not count.isascii() or not count.isdigit() or not 1 <= int(count) <= 1000000)):
+                raise ValueError()
+            if dates['publication_start_date'] and dates['publication_end_date'] and dates['publication_start_date'] > dates['publication_end_date']:
+                raise ValueError()
+        except (TypeError, ValueError):
+            return {'success': False, 'error': '날짜 순서·형식 또는 회차 수(1~1000000)를 확인해 주세요.'}
+        gateway = self.get_db_gateway(db_type)
+        if not gateway.fetch_one('SELECT id FROM books WHERE series_name = ? LIMIT 1', (series,)):
+            return {'success': False, 'error': '시리즈를 찾을 수 없습니다.'}
+        gateway.execute('UPDATE books SET cover_artist = ?, teams = ?, locations = ?, characters = ?, publication_status = ?, metadata_locked = 1 WHERE series_name = ?',
+                        (*[values[key] for key in fields], series))
+        extra = {**dates, 'manual_chapter_count': count}
+        try:
+            gateway.set_setting(self._extra_key(series), json.dumps(extra, ensure_ascii=False))
+        except Exception:
+            return {'success': False, 'error': '그림 작가·팀·장소·등장인물·연재 상태는 저장됐지만 날짜·회차 저장에 실패했습니다.'}
+        return {'success': True, 'metadata': {**values, **extra}}
 
     def get_dashboard_data(self, db_type, limit=12):
         # 공용 데이터 라우트에 login_required가 없으므로 여기서 반드시 검사한다.
@@ -77,7 +120,12 @@ class DetailStudioMetadataProvider(BaseMetadataProvider):
             return {'success': False, 'error': '도서를 찾을 수 없거나 접근 권한이 없습니다.'}
 
         if mode == 'files':
-            library = gateway.fetch_one('SELECT name FROM libraries WHERE id = ?', (target['library_id'],))
+            library = gateway.fetch_one('SELECT l.name, l.content_kind, k.name AS content_kind_name FROM libraries l LEFT JOIN library_kinds k ON k.code = l.content_kind WHERE l.id = ?', (target['library_id'],))
+            extended = gateway.fetch_one('SELECT cover_artist, teams, locations, characters, publication_status FROM books WHERE id = ?', (book_id,)) or {}
+            try:
+                extended.update(json.loads(gateway.get_setting(self._extra_key(target['series_name']), '{}')))
+            except (ValueError, TypeError):
+                pass
             files = gateway.fetch_all(
                 'SELECT id, file_size, file_mtime, created_at, books_lv, genre, tags FROM books WHERE series_name = ? '
                 'AND library_id = ? AND COALESCE(is_deleted, 0) = 0 ORDER BY id',
@@ -87,7 +135,7 @@ class DetailStudioMetadataProvider(BaseMetadataProvider):
             scope = gateway.fetch_one(
                 'SELECT COUNT(*) AS books, COUNT(DISTINCT library_id) AS libraries FROM books WHERE series_name = ?',
                 (target['series_name'],)) if admin else None
-            return {'success': True, 'files': files, 'can_edit': admin, 'edit_scope': scope, 'library_name': library['name'] if library else '', 'library_id': target['library_id'], 'can_download': check_download_permission()}
+            return {'success': True, 'files': files, 'can_edit': admin, 'edit_scope': scope, 'library_name': library['name'] if library else '', 'library_id': target['library_id'], 'can_download': check_download_permission(), 'extended_metadata': extended, 'content_kind': (library or {}).get('content_kind', 'unspecified'), 'content_kind_name': (library or {}).get('content_kind_name', '')}
 
         signature = json.dumps([db_type, target, admin, libraries, max_rating, ContentRatingService.get_adult_keywords()], sort_keys=True, ensure_ascii=False)
         cache_key = 'similar:' + hashlib.sha256(signature.encode()).hexdigest()
