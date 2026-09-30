@@ -460,6 +460,10 @@
         seriesName: meta.series_name || context.seriesName,
         libraryId: book.library_id ?? libraryId ?? context.libraryId,
         markUnreadScope: 'book',
+        fileFormat: String(book.file_format || '').toLowerCase(),
+        hasProgress: Number(book.is_completed) === 1 || num(book.pages_read) > 0,
+        coverAlign: book.cover_align || 'center',
+        bookCount: 1,
       });
       notify('메뉴에서 표지·메타정보·읽기 상태를 변경했다면 상세페이지를 다시 열어 최신 정보를 확인해 주세요.');
     };
@@ -609,12 +613,12 @@
         if (field === 'publisher') return notify('출판사 필터는 현재 코어에서 지원하지 않습니다. 지원되면 연결할 예정입니다.');
         if (typeof window.selectCategory !== 'function') return notify('작가 검색을 연결하지 못했습니다. 새로고침해 주세요.', true);
         try {
-          const { state } = await import('/static/js/state.js');
           if (!root.isConnected || !allowNavigation()) return;
-          state.searchQuery = `작가:${value}`;
-          const input = document.getElementById('library-search');
-          if (input) input.value = state.searchQuery;
-          window.selectCategory('all');
+          await window.selectCategory('all', false, {
+            preserveSearch: true,
+            searchQuery: `작가:${value}`,
+            searchNavigation: true,
+          });
         } catch { notify('작가 검색을 열지 못했습니다.', true); }
       });
       byline.append(button);
