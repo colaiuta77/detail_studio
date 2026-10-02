@@ -7,7 +7,7 @@ import re
 from flask import has_request_context, request, session
 from plugins.metadata.base import BaseMetadataProvider
 
-PLUGIN_VERSION = '0.9.1'
+PLUGIN_VERSION = '0.9.2'
 
 
 def tokens(value):
@@ -61,16 +61,27 @@ class DetailStudioMetadataProvider(BaseMetadataProvider):
                 raise ValueError()
         except (TypeError, ValueError):
             return {'success': False, 'error': '날짜 순서·형식 또는 회차 수(1~1000000)를 확인해 주세요.'}
-        gateway = self.get_db_gateway(db_type)
-        if not gateway.fetch_one('SELECT id FROM books WHERE series_name = ? LIMIT 1', (series,)):
-            return {'success': False, 'error': '시리즈를 찾을 수 없습니다.'}
-        gateway.execute('UPDATE books SET cover_artist = ?, teams = ?, locations = ?, characters = ?, publication_status = ?, metadata_locked = 1 WHERE series_name = ?',
-                        (*[values[key] for key in fields], series))
         extra = {**dates, 'manual_chapter_count': count}
+        target_id = self._extra_key(series)
+        fields_saved = False
         try:
-            gateway.set_setting(self._extra_key(series), json.dumps(extra, ensure_ascii=False))
-        except Exception:
-            return {'success': False, 'error': '그림 작가·팀·장소·등장인물·연재 상태는 저장됐지만 날짜·회차 저장에 실패했습니다.'}
+            gateway = self.get_db_gateway(db_type)
+            if not gateway.fetch_one('SELECT id FROM books WHERE series_name = ? LIMIT 1', (series,)):
+                return {'success': False, 'error': '시리즈를 찾을 수 없습니다.'}
+            gateway.execute('UPDATE books SET cover_artist = ?, teams = ?, locations = ?, characters = ?, publication_status = ?, metadata_locked = 1 WHERE series_name = ?',
+                            (*[values[key] for key in fields], series))
+            fields_saved = True
+            gateway.set_setting(target_id, json.dumps(extra, ensure_ascii=False))
+        except Exception as error:
+            detail = '그림 작가·팀·장소·등장인물·연재 상태는 저장됐지만 날짜·회차 저장에 실패했습니다.' if fields_saved else '추가 메타정보 저장에 실패했습니다.'
+            if hasattr(self, 'report_problem'):
+                self.report_problem('metadata_save_failed', title='메타정보 저장 실패',
+                                    detail=f'「{series}」 {detail} 저장소 상태를 확인하고 메타정보를 다시 저장해 주세요.',
+                                    severity='action_required', db_type=db_type, target_type='series', target_id=target_id,
+                                    series_name=series, message=str(error))
+            return {'success': False, 'error': detail}
+        if hasattr(self, 'resolve_problem'):
+            self.resolve_problem('metadata_save_failed', db_type=db_type, target_type='series', target_id=target_id)
         return {'success': True, 'metadata': {**values, **extra}}
 
     def get_dashboard_data(self, db_type, limit=12):
