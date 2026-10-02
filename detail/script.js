@@ -338,9 +338,15 @@
     mobile.addEventListener('change', apply);
     const back = container.closest('#book-detail-view')?.querySelector(':scope > .btn-back-to-list');
     if (!back) return () => mobile.removeEventListener('change', apply);
+    const backLabel = back.getAttribute('aria-label');
+    back.setAttribute('aria-label', backLabel || back.textContent.trim() || '목록으로 돌아가기');
     const marker = document.createComment('Detail Studio back button'); back.before(marker);
     $('[data-back-slot]').hidden = false; $('[data-back-slot]').append(back);
-    return () => { mobile.removeEventListener('change', apply); if (marker.isConnected) marker.replaceWith(back); };
+    return () => {
+      mobile.removeEventListener('change', apply);
+      if (backLabel === null) back.removeAttribute('aria-label'); else back.setAttribute('aria-label', backLabel);
+      if (marker.isConnected) marker.replaceWith(back);
+    };
   }
   let collectionLoading = false, collectionWriting = false;
   async function toggleCollections() {

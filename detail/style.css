@@ -330,7 +330,18 @@
 .ds .ds-star-half i{width:22px;min-width:22px;text-align:center}
 .ds .ds-star-right i{transform:translateX(-11px)}
 .ds .ds-star-half:hover{color:#ffd75e}
-@media(max-width:700px){.ds [data-rail-details],.ds .ds-collection-menu{grid-column:1/-1}.ds .ds-topbar{padding:8px}.ds .ds-appearance{font-size:12px}}
+@media(max-width:700px){
+.ds [data-rail-details],.ds .ds-collection-menu{grid-column:1/-1}
+.ds .ds-topbar{display:flex;flex-wrap:nowrap;gap:4px;padding:8px}
+.ds [data-back-slot]{flex-shrink:0}
+.ds [data-back-slot] .btn-back-to-list{display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;padding:0;gap:0;font-size:0}
+.ds [data-back-slot] .btn-back-to-list span{display:none}
+.ds [data-back-slot] .btn-back-to-list i{font-size:15px}
+.ds .ds-topbar .ds-tabs{flex:1}
+.ds .ds-tabs>button{gap:4px;padding:13px 8px 11px;font-size:11px}
+.ds .ds-tabs>button:first-child{margin-left:auto}
+.ds .ds-appearance{font-size:12px}
+}
 
 @media(min-width:1500px){.ds .ds-layout{grid-template-columns:260px minmax(0,1fr)}}
 @media(min-width:1001px) and (max-width:1499px){.ds .ds-layout{grid-template-columns:248px minmax(0,1fr)}}
