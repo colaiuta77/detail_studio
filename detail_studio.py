@@ -1,13 +1,14 @@
 # 도서 상세 탭에 필요한 파일 정보와 권한별 유사 도서를 제공합니다.
 from datetime import date
 import hashlib
+import html
 import json
 import re
 
 from flask import has_request_context, request, session
 from plugins.metadata.base import BaseMetadataProvider
 
-PLUGIN_VERSION = '0.9.2'
+PLUGIN_VERSION = '1.0.0'
 
 
 def tokens(value):
@@ -24,6 +25,9 @@ class DetailStudioMetadataProvider(BaseMetadataProvider):
     detail_view = {'title': 'Detail Studio', 'sessions': ['general', 'adult', 'audiobook', 'video']}
     dashboard_widget = None
     category_tab = None
+    home_widget = {'title': '데일리 픽 · 좋은 글귀', 'subtitle': '오늘의 작품과 페이지 사이의 짧은 문장',
+                   'icon': 'fa-solid fa-star', 'order': 5, 'limit': 5,
+                   'sessions': ['general', 'adult'], 'layout': 'full', 'frame': 'none'}
 
     def search(self, db_type, query):
         return []
@@ -36,6 +40,8 @@ class DetailStudioMetadataProvider(BaseMetadataProvider):
         return 'detail_studio:metadata:' + hashlib.sha256(series.encode()).hexdigest()
 
     def run_context_menu_action(self, db_type, action_id, context):
+        if isinstance(action_id, str) and action_id.startswith('quotes_'):
+            return self._quotes_action(db_type, action_id, context)
         if not has_request_context() or not session.get('user_id') or session.get('role') != 'admin' or session.get('is_default_password') == 1:
             return {'success': False, 'error': '관리자만 추가 메타정보를 수정할 수 있습니다.'}
         if db_type not in ('general', 'adult') or action_id != 'save_metadata' or not isinstance(context, dict):
@@ -96,6 +102,18 @@ class DetailStudioMetadataProvider(BaseMetadataProvider):
             db_type == 'adult' and not admin and session.get('has_adult_access') != 1
         ):
             return {'success': False, 'error': '접근할 수 없는 서재입니다.'}
+        quote_mode = request.args.get('mode') == 'quotes'
+        home_mode = 'book_id' not in request.args and request.args.get('mode', 'daily') == 'daily'
+        if quote_mode or home_mode:
+            from .quotes import selected_widget
+            try:
+                if selected_widget(self.get_plugin_config(db_type, default={})) == 'quotes':
+                    return {'success': True, 'items': [self._quotes_service(db_type).card([], initial=True)]}
+                if quote_mode:
+                    return {'success': True, 'items': [{'widget_type': 'quotes', 'enabled': False, 'daily_enabled': True}]}
+            except (ValueError, OSError, RuntimeError):
+                return {'success': False, 'error': '글귀 설정이나 저장소를 확인해 주세요.'}
+            return self._daily_picks(db_type, limit, admin)
         try:
             book_id = int(request.args.get('book_id', ''))
             limit = min(24, max(1, int(limit)))
@@ -194,6 +212,143 @@ class DetailStudioMetadataProvider(BaseMetadataProvider):
         items = sorted(ranked.values(), key=lambda item: (-item['score'], item['series_name']))[:24]
         self.cache_set(cache_key, json.dumps(items, ensure_ascii=False), ttl=120)
         return {'success': True, 'items': items[:limit]}
+
+    def _quotes_service(self, db_type):
+        from .quotes import QuoteService
+        from .quote_store import QuoteStore
+        return QuoteService(QuoteStore(), self.get_plugin_config(db_type, default={}) or {})
+
+    def _quotes_action(self, db_type, action_id, context):
+        from urllib.parse import urlsplit
+        if not has_request_context() or not session.get('user_id') or session.get('is_default_password') == 1:
+            return {'success': False, 'error': '로그인이 필요합니다.'}
+        if db_type not in ('general', 'adult', 'audiobook', 'video') or not isinstance(context, dict):
+            return {'success': False, 'error': '올바르지 않은 글귀 요청입니다.'}
+        if db_type == 'adult' and session.get('role') != 'admin' and session.get('has_adult_access') != 1:
+            return {'success': False, 'error': '접근할 수 없는 서재입니다.'}
+        # 커스텀 헤더와 동일 출처 검사로 코어 공용 액션 라우트의 CSRF 경계를 보완한다.
+        origin = request.headers.get('Origin')
+        if request.headers.get('X-Detail-Studio-Quotes') != '1' or request.headers.get('Sec-Fetch-Site') == 'cross-site' or (
+            origin and urlsplit(origin).netloc != request.host
+        ):
+            return {'success': False, 'error': '같은 BookOasis 화면에서 다시 실행해 주세요.'}
+        public_actions = ('quotes_next', 'quotes_background')
+        if action_id not in public_actions and session.get('role') != 'admin':
+            return {'success': False, 'error': '관리자만 글귀를 관리할 수 있습니다.'}
+        try:
+            service = self._quotes_service(db_type)
+            from .quotes import selected_widget
+            from .quote_media import MediaService
+            if action_id in public_actions and selected_widget(service.config) != 'quotes':
+                return {'success': False, 'error': '좋은 글귀 카드가 꺼져 있습니다.'}
+            if action_id == 'quotes_next':
+                return {'success': True, 'item': service.card(context.get('recent', []),
+                                                            include_background=False)}
+            if action_id == 'quotes_background':
+                tags = context.get('tags', [])
+                if not isinstance(tags, list) or len(tags) > 10 or any(not isinstance(tag, str) or len(tag) > 80 for tag in tags):
+                    raise ValueError('태그 형식을 확인해 주세요.')
+                return {'success': True, 'background': MediaService(service).background(tags, force=context.get('force') is True)}
+            if action_id == 'quotes_manage':
+                return {'success': True, 'providers': service.status()}
+            if action_id in ('quotes_translation_status', 'quotes_translate'):
+                from .quote_translation import DeepLTranslation
+                from .quote_http import RemoteError
+                translator = DeepLTranslation(service)
+                try:
+                    if action_id == 'quotes_translation_status':
+                        preparation = service.prepare_translation_sources() if context.get('refresh_sources') is True else {}
+                        result = {**translator.summary(), **preparation}
+                    else:
+                        result = translator.translate(context.get('ids'))
+                except RemoteError as error:
+                    return {'success': False, 'error': str(error)}
+                return {'success': True, **result}
+            return {'success': False, 'error': '지원하지 않는 글귀 작업입니다.'}
+        except (ValueError, OSError, TypeError, RuntimeError):
+            return {'success': False, 'error': '글귀 작업에 실패했습니다. 입력 형식·저장소·외부 서비스 상태를 확인해 주세요.'}
+
+    def _daily_picks(self, db_type, limit, admin):
+        if db_type not in ('general', 'adult'):
+            return {'success': False, 'error': '일반·성인 도서에서 지원합니다.'}
+        from services.content_rating_service import ContentRatingService
+        from api.auth import check_adult_permission
+        from utils.cover_helper import get_cover_image_with_t
+
+        if not check_adult_permission(db_type):
+            return {'success': False, 'error': '접근할 수 없는 서재입니다.'}
+        config = self.get_plugin_config(db_type, default={}) or {}
+        from .quotes import selected_widget
+        if selected_widget(config) != 'daily':
+            return {'success': True, 'items': []}
+        selected = config.get('daily_pick_libraries', []) if isinstance(config, dict) else []
+        try:
+            if isinstance(selected, str):
+                selected = json.loads(selected)
+            limit = min(5, max(1, int(limit)))
+            max_rating = int(session.get('content_rating_max', 18))
+        except (ValueError, TypeError):
+            return {'success': True, 'items': []}
+        if not isinstance(selected, list):
+            return {'success': True, 'items': []}
+        selected = sorted({str(value) for value in selected if type(value) in (str, int) and str(value)})
+        if not selected:
+            return {'success': True, 'items': []}
+        gateway = self.get_db_gateway(db_type)
+        allowed = '' if admin else ' AND id IN (SELECT library_id FROM user_category_permissions WHERE user_id = ? AND has_access = 1)'
+        libraries = gateway.fetch_all('SELECT id, name FROM libraries WHERE id IN (' + ','.join('?' for _ in selected) + ')' + allowed,
+                                      (*selected, *([] if admin else [session['user_id']])))
+        names = {str(row['id']): row['name'] for row in libraries}
+        if not names:
+            return {'success': True, 'items': []}
+        library_ids = sorted(names)
+        placeholders = ','.join('?' for _ in library_ids)
+        day = date.today().isoformat()
+        cache_key = 'daily:' + hashlib.sha256(json.dumps([db_type, day, library_ids]).encode()).hexdigest()
+        try:
+            candidates = json.loads(self.cache_get(cache_key) or 'null')
+        except (ValueError, TypeError):
+            candidates = None
+        if not isinstance(candidates, list) or any(type(value) is not int for value in candidates):
+            ready = gateway.fetch_one('SELECT is_ready FROM series_summary_state WHERE id = 1')
+            if ready and ready['is_ready']:
+                rows = gateway.fetch_all('SELECT library_id, series_key, representative_book_id FROM series_summary '
+                                         f'WHERE library_id IN ({placeholders})', library_ids)
+            else:
+                rows = gateway.fetch_all("SELECT library_id, COALESCE(NULLIF(series_name, ''), title) AS series_key, MIN(id) AS representative_book_id "
+                                         f'FROM books WHERE COALESCE(is_deleted, 0) = 0 AND library_id IN ({placeholders}) '
+                                         "GROUP BY library_id, COALESCE(NULLIF(series_name, ''), title)", library_ids)
+            rows.sort(key=lambda row: hashlib.sha256(f"{day}|{db_type}|{row['library_id']}|{row['series_key']}".encode()).digest())
+            candidates = [int(row['representative_book_id']) for row in rows]
+            self.cache_set(cache_key, json.dumps(candidates), ttl=600)
+        items = []
+        # 캐시는 후보 ID만 보관하고 실제 도서·권한·등급은 요청마다 다시 확인한다.
+        for offset in range(0, len(candidates), 24):
+            batch = candidates[offset:offset + 24]
+            rows = gateway.fetch_all(
+                'SELECT b.id, b.library_id, b.series_name, b.series_alias, b.title, b.author, b.summary, b.genre, b.tags, b.books_lv, '
+                'b.publication_status, b.cover_image, b.cover_updated_at, b.banner_image, b.banner_updated_at, b.file_format, b.total_pages, '
+                'COALESCE(p.pages_read, 0) AS pages_read, COALESCE(s.series_book_count, 0) AS book_count '
+                'FROM books b LEFT JOIN user_progress p ON p.book_id=b.id AND p.user_id=? '
+                "LEFT JOIN series_summary s ON s.library_id=b.library_id AND s.series_key=COALESCE(NULLIF(b.series_name, ''), b.title) "
+                'WHERE COALESCE(b.is_deleted, 0)=0 AND b.id IN (' + ','.join('?' for _ in batch) + ') '
+                f'AND b.library_id IN ({placeholders})', (session['user_id'], *batch, *library_ids))
+            by_id = {row['id']: row for row in rows}
+            for book_id in batch:
+                row = by_id.get(book_id)
+                if not row or (not admin and ContentRatingService.compute_effective_level(row.get('books_lv'), row.get('genre'), row.get('tags')) > max_rating):
+                    continue
+                items.append({'book_id': row['id'], 'db_type': db_type, 'library_id': row['library_id'],
+                              'library_name': names[str(row['library_id'])], 'series_name': row['series_name'] or row['title'],
+                              'title': row['series_alias'] or row['series_name'] or row['title'], 'author': row['author'] or '',
+                              'summary': html.unescape(re.sub('<[^>]*>', ' ', row['summary'] or '')).strip()[:1200],
+                              'genre': row['genre'] or '', 'tags': row['tags'] or '', 'publication_status': row['publication_status'], 'book_count': row['book_count'],
+                              'cover': get_cover_image_with_t(row['cover_image'], row['cover_updated_at']),
+                              'banner': get_cover_image_with_t(row['banner_image'], row['banner_updated_at']),
+                              'file_format': row['file_format'], 'pages_read': row['pages_read'], 'total_pages': row['total_pages'], 'date': day})
+                if len(items) >= limit:
+                    return {'success': True, 'items': items}
+        return {'success': True, 'items': items}
 
     def _media_data(self, gateway, db_type, book_id, mode, limit, admin, permission, libraries):
         # 테이블과 필드는 검증된 세션에 대한 고정 매핑만 사용한다.
