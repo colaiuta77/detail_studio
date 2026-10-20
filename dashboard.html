@@ -1,0 +1,64 @@
+<!-- 선택한 데일리 픽 또는 좋은 글귀 홈 위젯을 표시합니다. -->
+<section class="daily-pick" aria-label="데일리 픽" aria-roledescription="캐러셀" hidden>
+  <p class="daily-empty" data-daily-empty hidden>오늘 만날 작품을 기다리고 있어요.<br><small>Detail Studio 플러그인 설정에서 보관함을 선택해 주세요. 접근 가능한 도서가 있을 때 표시됩니다.</small></p>
+  <div class="daily-viewport" data-daily-viewport>
+  <article class="daily-slide" data-daily-slide>
+  <img class="daily-background" data-daily-background alt="" aria-hidden="true" hidden>
+  <div class="daily-shade" aria-hidden="true"></div>
+  <div class="daily-main" data-daily-main>
+    <button type="button" class="daily-cover" data-daily-detail aria-label="작품 상세보기">
+      <span class="daily-cover-placeholder" aria-hidden="true">BOOK<br>OASIS</span>
+      <img data-daily-cover alt="" hidden>
+    </button>
+    <div class="daily-copy">
+      <p class="daily-eyebrow"><span>★ DAILY PICK</span><time data-daily-date></time></p>
+      <h2 data-daily-title></h2>
+      <div class="daily-meta"><span data-daily-meta></span><button type="button" class="daily-library" data-daily-library></button></div>
+      <div class="daily-chips" data-daily-chips aria-label="장르와 태그"></div>
+      <p class="daily-summary" data-daily-summary></p>
+      <div class="daily-actions">
+        <button type="button" class="daily-read" data-daily-read><span aria-hidden="true">▶</span> 읽기</button>
+        <button type="button" class="daily-detail" data-daily-detail>상세보기 <span aria-hidden="true">↗</span></button>
+      </div>
+    </div>
+  </div>
+  </article>
+  </div>
+  <div class="daily-footer" data-daily-footer>
+    <div class="daily-dots" data-daily-dots aria-label="오늘의 작품 선택"></div>
+    <div class="daily-navigation">
+      <span class="daily-status" data-daily-status role="status" aria-live="polite"></span>
+      <button type="button" data-daily-previous aria-label="이전 작품">‹</button>
+      <button type="button" data-daily-pause aria-label="자동 전환 일시중지" aria-pressed="false"></button>
+      <button type="button" data-daily-next aria-label="다음 작품">›</button>
+    </div>
+  </div>
+</section>
+<section class="ds-quote" data-background="gradient" aria-label="좋은 글귀" hidden>
+  <img class="ds-quote-background" data-quote-image alt="" aria-hidden="true" hidden>
+  <div class="ds-quote-content">
+    <p class="ds-quote-eyebrow">A MOMENT BETWEEN PAGES <span>좋은 글귀</span></p>
+    <div class="ds-quote-reading">
+      <div class="ds-quote-reading-inner">
+        <div class="ds-quote-words" aria-live="polite" aria-atomic="true">
+          <blockquote data-quote-en lang="en"></blockquote>
+          <p data-quote-ko lang="ko"></p>
+        </div>
+        <p class="ds-quote-author" data-quote-author></p>
+      </div>
+    </div>
+  </div>
+  <div class="ds-quote-footer">
+    <p class="ds-quote-status" data-quote-status role="status"></p>
+    <div class="ds-quote-controls">
+      <small class="ds-quote-translation" data-quote-translation hidden></small>
+      <button type="button" data-quote-next aria-label="다른 글귀" title="다른 글귀"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg></button>
+      <button type="button" data-quote-language aria-label="글귀 언어 전환">En.한</button>
+      <button type="button" data-quote-background aria-label="배경 변경" title="배경 변경"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg></button>
+      <div class="ds-quote-sources" data-open="false">
+        <button type="button" data-quote-source-toggle aria-label="출처 보기" aria-haspopup="dialog" aria-expanded="false" aria-controls="ds-quote-source-info"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7h.01"/></svg></button>
+        <div id="ds-quote-source-info" data-quote-sources role="dialog" aria-label="출처 정보" hidden></div>
+      </div>
+    </div>
+  </div>
+</section>
