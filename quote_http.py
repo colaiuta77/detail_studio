@@ -54,7 +54,7 @@ def fetch_json(url, *, hosts, headers=None, body=None, limit=1024 * 1024, timeou
             ip = ipaddress.ip_address(address[4][0])
             if not ip.is_global:
                 raise RemoteError('허용되지 않은 서버 주소입니다.')
-        request_headers = {'User-Agent': 'BookOasis-DetailStudio-Quotes/1.0.0', 'Accept': 'application/json'}
+        request_headers = {'User-Agent': 'BookOasis-DetailStudio-Quotes/1.0.1', 'Accept': 'application/json'}
         request_headers.update(headers or {})
         payload = None if body is None else json.dumps(body).encode('utf-8')
         if payload is not None:
