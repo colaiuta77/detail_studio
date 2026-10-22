@@ -862,7 +862,8 @@
     const { state } = await import('/static/js/state.js');
     if (!root.isConnected) return;
     coreState = state;
-    type = state.currentLibraryType;
+    // 버전 경로로 로드된 코어와 직접 import한 state는 별개일 수 있어 공개 세션을 우선한다.
+    type = window.BookOasisPlugin?.getSession?.().libraryType || window.currentLibraryType || state.currentLibraryType;
     if (!['general', 'adult', 'audiobook', 'video'].includes(type)) throw new Error('지원하지 않는 서재 유형입니다.');
     media = type === 'audiobook' || type === 'video';
     unit = type === 'audiobook' ? '트랙' : type === 'video' ? '편' : '권';
